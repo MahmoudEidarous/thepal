@@ -35,15 +35,15 @@ type Capture = {
 };
 
 const TYPE_COLORS: Record<string, string> = {
-  fact: "#7FA3F2",
-  event: "#9BB8F4",
-  taste: "#F0A6C0",
-  decision: "#8FD3B6",
-  commitment: "#F5C97B",
-  boundary: "#F49B9B",
-  safety: "#F47F7F",
-  impression: "#B48CFF",
-  memory: "#93A0BE",
+  fact: "#6C9BF0",
+  event: "#62B7E6",
+  taste: "#EF7FB4",
+  decision: "#52C79A",
+  commitment: "#F2B03D",
+  boundary: "#E9805E",
+  safety: "#F05252",
+  impression: "#A78BFA",
+  memory: "#8B96B3",
 };
 
 const STOP = new Set(
@@ -64,10 +64,10 @@ function nodeLabel(text: string): string {
 }
 
 function nodeColor(e: MemoryEntry): string {
-  if (e.isInference) return "#B48CFF";
-  if (e.history.length > 0) return "#F0A6C0";
+  if (e.isInference) return "#A78BFA";
+  if (e.history.length > 0) return "#EF7FB4";
   if (e.isStatic) return "#EFD98B";
-  return "#7FA3F2";
+  return "#6C9BF0";
 }
 
 function jitter(id: string, salt = 0): number {
@@ -107,8 +107,8 @@ function layout(entries: MemoryEntry[], w: number, h: number) {
   });
   nodes.forEach((n) => {
     n.r =
-      10 +
-      Math.min(16, n.degree * 5 + (n.history.length > 0 ? 4 : 0) + (n.isStatic ? 3 : 0));
+      11 +
+      Math.min(15, n.degree * 5 + (n.history.length > 0 ? 4 : 0) + (n.isStatic ? 3 : 0));
   });
 
   const anchors = nodes.filter((n) => n.isStatic);
@@ -123,7 +123,7 @@ function layout(entries: MemoryEntry[], w: number, h: number) {
         let dy = a.y - b.y;
         const d2 = dx * dx + dy * dy || 1;
         const d = Math.sqrt(d2);
-        const min = a.r + b.r + 62;
+        const min = a.r + b.r + 74;
         const f = Math.min(6, (3200 / d2) * heat + (d < min ? (min - d) * 0.12 : 0));
         dx /= d;
         dy /= d;
@@ -147,6 +147,13 @@ function layout(entries: MemoryEntry[], w: number, h: number) {
       const g = anchors.includes(n) ? 0.03 : 0.008;
       n.x -= n.x * g * heat;
       n.y -= n.y * g * heat;
+      // you sit at the origin — nothing gets to sit on top of you
+      const d = Math.hypot(n.x, n.y) || 1;
+      const clear = anchors.includes(n) ? 84 : 132;
+      if (d < clear) {
+        n.x *= clear / d;
+        n.y *= clear / d;
+      }
     }
   }
 
@@ -170,18 +177,51 @@ function layout(entries: MemoryEntry[], w: number, h: number) {
   return { nodes, edges, center: { x: cx, y: cy } };
 }
 
-function SalienceBar({ value }: { value: number }) {
-  return (
-    <span className="inline-flex items-center gap-1.5" title={`salience ${value}`}>
-      <span className="h-[3px] w-10 overflow-hidden rounded-full bg-white/10">
-        <span
-          className="block h-full rounded-full bg-indigo-300/80"
-          style={{ width: `${Math.round(value * 100)}%` }}
-        />
-      </span>
-    </span>
-  );
+// ── dates, the human way ──────────────────────────────────────────
+
+function localToday(): string {
+  return new Date().toLocaleDateString("en-CA");
 }
+
+function daysBetween(a: string, b: string): number {
+  return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+}
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function prettyDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function fmtDue(due: string, today: string): { text: string; tone: "late" | "now" | "soon" | "far" } {
+  const diff = daysBetween(today, due);
+  if (diff < 0) return { text: diff === -1 ? "1 day late" : `${-diff} days late`, tone: "late" };
+  if (diff === 0) return { text: "today", tone: "now" };
+  if (diff === 1) return { text: "tomorrow", tone: "now" };
+  if (diff <= 7) {
+    const [y, m, d] = due.split("-").map(Number);
+    return { text: WEEKDAYS[new Date(y, m - 1, d).getDay()], tone: "soon" };
+  }
+  return { text: prettyDate(due), tone: "far" };
+}
+
+function dayLabel(createdAt: string, today: string): string {
+  const day = new Date(createdAt).toLocaleDateString("en-CA");
+  const diff = daysBetween(day, today);
+  if (diff === 0) return "today";
+  if (diff === 1) return "yesterday";
+  const d = new Date(createdAt);
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
+const DUE_TONE: Record<string, string> = {
+  late: "bg-red-500/15 text-red-300",
+  now: "bg-amber-400/15 text-amber-200",
+  soon: "bg-white/[0.07] text-zinc-300",
+  far: "bg-white/[0.05] text-zinc-500",
+};
 
 export default function Brain() {
   const [view, setView] = useState<View>("graph");
@@ -194,6 +234,12 @@ export default function Brain() {
   const [ledger, setLedger] = useState<{ open: LedgerItem[]; done: LedgerItem[] } | null>(null);
   const [captures, setCaptures] = useState<Capture[] | null>(null);
   const [hintsFor, setHintsFor] = useState<Record<string, string[]>>({});
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [closing, setClosing] = useState<string | null>(null);
+  const [showDone, setShowDone] = useState(false);
+
+  const today = localToday();
 
   // deep link: /brain?tab=ledger
   useEffect(() => {
@@ -210,31 +256,6 @@ export default function Brain() {
     return () => window.removeEventListener("resize", measure);
   }, []);
 
-  useEffect(() => {
-    const load = () =>
-      fetch("/api/feed")
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => d && setEntries(d.entries ?? []))
-        .catch(() => {});
-    load();
-    const t = setInterval(() => {
-      if (!document.hidden) load();
-    }, 10_000);
-    return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    fetch("/api/profile")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        const m = (d?.profile?.static ?? [])
-          .join(" ")
-          .match(/(?:user'?s?|my) name is (\w+)/i);
-        if (m) setName(m[1].toUpperCase());
-      })
-      .catch(() => {});
-  }, []);
-
   const loadLedger = useCallback(() => {
     fetch("/api/ledger")
       .then((r) => (r.ok ? r.json() : null))
@@ -249,17 +270,46 @@ export default function Brain() {
       .catch(() => {});
   }, []);
 
+  // everything loads up front — tab switches are instant, counts are live
   useEffect(() => {
-    if (view === "ledger") loadLedger();
-    if (view === "captures") loadCaptures();
-  }, [view, loadLedger, loadCaptures]);
+    const load = () =>
+      fetch("/api/feed")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d && setEntries(d.entries ?? []))
+        .catch(() => {});
+    load();
+    loadLedger();
+    loadCaptures();
+    const t = setInterval(() => {
+      if (!document.hidden) {
+        load();
+        loadLedger();
+        loadCaptures();
+      }
+    }, 12_000);
+    return () => clearInterval(t);
+  }, [loadLedger, loadCaptures]);
+
+  useEffect(() => {
+    fetch("/api/profile")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const m = [...(d?.profile?.static ?? []), ...(d?.profile?.dynamic ?? [])]
+          .join(" ")
+          .match(/(?:user'?s?|my) name is (\w+)/i);
+        if (m) setName(m[1].toUpperCase());
+      })
+      .catch(() => {});
+  }, []);
 
   async function completeItem(id: string) {
+    setClosing(id);
     await fetch("/api/agenda/complete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }),
     }).catch(() => {});
+    setClosing(null);
     loadLedger();
   }
 
@@ -284,13 +334,54 @@ export default function Brain() {
   const query = q.trim().toLowerCase();
   const matches = (n: Node) =>
     !query || n.memory.toLowerCase().includes(query) || n.label.toLowerCase().includes(query);
-  const isLit = (n: Node) => matches(n) && (!hoverId || n.id === hoverId || connected(n));
   const connected = (n: Node) =>
     !!hoverId &&
     edges.some(
       (e) =>
         (e.a.id === hoverId && e.b.id === n.id) || (e.b.id === hoverId && e.a.id === n.id),
     );
+
+  // ── ledger groups ────────────────────────────────────────────────
+  const groups = useMemo(() => {
+    const open = ledger?.open ?? [];
+    const late = open.filter((c) => c.due && c.due < today);
+    const soon = open.filter((c) => c.due && c.due >= today && daysBetween(today, c.due) <= 7);
+    const later = open.filter((c) => c.due && daysBetween(today, c.due) > 7);
+    const someday = open.filter((c) => !c.due);
+    return [
+      { title: "overdue", items: late, accent: "text-red-300" },
+      { title: "this week", items: soon, accent: "text-amber-200" },
+      { title: "later", items: later, accent: "text-zinc-300" },
+      { title: "no deadline", items: someday, accent: "text-zinc-500" },
+    ].filter((g) => g.items.length > 0);
+  }, [ledger, today]);
+
+  // ── capture filters + day groups ─────────────────────────────────
+  const typeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    (captures ?? []).forEach((c) => {
+      const t = String(c.meta.type ?? "memory");
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    });
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [captures]);
+
+  const dayGroups = useMemo(() => {
+    const shown = (captures ?? []).filter(
+      (c) => !typeFilter || String(c.meta.type ?? "memory") === typeFilter,
+    );
+    const out: Array<{ day: string; items: Capture[] }> = [];
+    shown.forEach((c) => {
+      const label = c.createdAt ? dayLabel(c.createdAt, today) : "earlier";
+      const last = out[out.length - 1];
+      if (last && last.day === label) last.items.push(c);
+      else out.push({ day: label, items: [c] });
+    });
+    return out;
+  }, [captures, typeFilter, today]);
+
+  const openCount = ledger?.open.length ?? 0;
+  const lateCount = ledger?.open.filter((c) => c.due && c.due < today).length ?? 0;
 
   return (
     <div className="relative h-dvh overflow-hidden" onClick={() => setSelected(null)}>
@@ -316,44 +407,79 @@ export default function Brain() {
         </Link>
 
         <nav className="glass-chip flex items-center gap-1 rounded-full p-1">
-          {(["graph", "ledger", "captures"] as View[]).map((v) => (
+          {(
+            [
+              ["graph", entries.length],
+              ["ledger", openCount],
+              ["captures", captures?.length ?? 0],
+            ] as Array<[View, number]>
+          ).map(([v, n]) => (
             <button
               key={v}
               onClick={() => setView(v)}
               className={
-                "rounded-full px-4 py-1.5 font-mono text-[10px] uppercase tracking-[0.2em] transition-all " +
+                "flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[12px] font-medium transition-all " +
                 (view === v
                   ? "bg-white/10 text-zinc-100 shadow-[inset_0_1px_0_rgb(255_255_255/0.1)]"
                   : "text-zinc-500 hover:text-zinc-200")
               }
             >
               {v}
+              {n > 0 && (
+                <span
+                  className={
+                    "font-mono text-[10px] " +
+                    (v === "ledger" && lateCount > 0
+                      ? "text-red-300"
+                      : view === v
+                        ? "text-zinc-400"
+                        : "text-zinc-600")
+                  }
+                >
+                  {n}
+                </span>
+              )}
             </button>
           ))}
         </nav>
 
-        <div className="glass-chip flex items-center gap-2 rounded-full px-3.5 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-400">
-          {entries.length} memories
-        </div>
+        <Link
+          href="/"
+          className="glass-chip rounded-full px-3.5 py-2 text-[12px] text-zinc-400 transition-colors hover:text-zinc-100"
+        >
+          ← talk
+        </Link>
       </header>
 
       {/* ── graph ─────────────────────────────────────────────── */}
       {view === "graph" && (
         <>
-          <div className="absolute inset-x-0 top-[68px] z-30 flex justify-center">
+          <div className="absolute inset-x-0 top-[72px] z-30 flex justify-center">
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="search the sky"
-              className="glass-chip h-9 w-64 rounded-full px-4 text-center text-[12.5px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25"
+              placeholder="search your memory"
+              className="glass-chip h-9 w-72 rounded-full px-4 text-center text-[13px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25"
               onClick={(e) => e.stopPropagation()}
             />
           </div>
 
           <svg className="absolute inset-0 h-full w-full" aria-hidden>
+            {/* orbit rings around you */}
+            {[150, 280, 410].map((r) => (
+              <circle
+                key={r}
+                cx={center.x}
+                cy={center.y}
+                r={r}
+                fill="none"
+                stroke="rgba(255,255,255,0.035)"
+                strokeWidth="1"
+                strokeDasharray="1 7"
+              />
+            ))}
             {edges.map((e, i) => {
-              const lit =
-                hoverId && (e.a.id === hoverId || e.b.id === hoverId);
+              const lit = hoverId && (e.a.id === hoverId || e.b.id === hoverId);
               return (
                 <line
                   key={i}
@@ -363,10 +489,10 @@ export default function Brain() {
                   y2={e.b.y}
                   stroke={
                     e.kind === "updates"
-                      ? `rgba(244,114,140,${lit ? 0.7 : 0.34})`
-                      : `rgba(150,163,255,${lit ? 0.6 : 0.26})`
+                      ? `rgba(244,114,140,${lit ? 0.8 : 0.4})`
+                      : `rgba(150,163,255,${lit ? 0.7 : 0.32})`
                   }
-                  strokeWidth={lit ? 1.8 : 1.2}
+                  strokeWidth={lit ? 2 : 1.3}
                 />
               );
             })}
@@ -379,7 +505,7 @@ export default function Brain() {
                   y1={center.y}
                   x2={n.x}
                   y2={n.y}
-                  stroke="rgba(239,217,139,0.14)"
+                  stroke="rgba(239,217,139,0.16)"
                   strokeWidth="1"
                 />
               ))}
@@ -392,7 +518,7 @@ export default function Brain() {
           >
             <div className="flex flex-col items-center gap-2.5">
               <span className="block size-[26px] rotate-45 rounded-[6px] bg-amber-200 shadow-[0_0_28px_4px_rgb(253_230_138/0.35)]" />
-              <span className="font-mono text-[11px] tracking-[0.3em] text-amber-100/90">
+              <span className="rounded-md bg-black/55 px-2 py-0.5 font-mono text-[11px] tracking-[0.25em] text-amber-100">
                 {name}
               </span>
             </div>
@@ -400,7 +526,8 @@ export default function Brain() {
 
           {nodes.map((n) => {
             const isSel = selected?.id === n.id;
-            const dim = query ? !matches(n) : hoverId ? !isLit(n) && n.id !== hoverId : false;
+            const lit = n.id === hoverId || connected(n);
+            const dim = query ? !matches(n) : hoverId ? !lit : false;
             return (
               <button
                 key={n.id}
@@ -411,9 +538,9 @@ export default function Brain() {
                 onMouseEnter={() => setHoverId(n.id)}
                 onMouseLeave={() => setHoverId(null)}
                 className="group absolute z-10 -translate-x-1/2 -translate-y-1/2 outline-none transition-opacity duration-300"
-                style={{ left: n.x, top: n.y, opacity: dim ? 0.15 : 1 }}
+                style={{ left: n.x, top: n.y, opacity: dim ? 0.12 : 1 }}
               >
-                <span className="node-in flex flex-col items-center gap-2">
+                <span className="node-in flex flex-col items-center gap-1.5">
                   <span
                     className={
                       "block rounded-full transition-transform duration-300 group-hover:scale-110 " +
@@ -422,14 +549,16 @@ export default function Brain() {
                     style={{
                       width: n.r * 2,
                       height: n.r * 2,
-                      background: `radial-gradient(circle at 34% 30%, ${n.color}, ${n.color}88 68%, ${n.color}55)`,
-                      boxShadow: `0 0 ${isSel ? 34 : 18}px ${isSel ? 6 : 2}px ${n.color}${isSel ? "66" : "33"}, inset 0 1px 0 rgb(255 255 255 / 0.35)`,
+                      background: `radial-gradient(circle at 35% 30%, ${n.color}F2, ${n.color}CC 70%, ${n.color}99)`,
+                      boxShadow: `0 0 0 3px ${n.color}22, 0 0 ${isSel || lit ? 30 : 16}px ${isSel || lit ? 5 : 2}px ${n.color}${isSel || lit ? "66" : "30"}, inset 0 1px 0 rgb(255 255 255 / 0.4)`,
                     }}
                   />
                   <span
                     className={
-                      "max-w-[130px] truncate font-mono text-[10px] tracking-[0.18em] transition-colors " +
-                      (isSel ? "text-zinc-100" : "text-zinc-500 group-hover:text-zinc-200")
+                      "max-w-[150px] truncate rounded-md bg-black/55 px-1.5 py-0.5 font-mono text-[10.5px] tracking-[0.1em] transition-colors " +
+                      (isSel || lit
+                        ? "text-white"
+                        : "text-zinc-400 group-hover:text-zinc-100")
                     }
                   >
                     {n.label}
@@ -496,104 +625,131 @@ export default function Brain() {
             </aside>
           )}
 
-          <div className="pointer-events-none absolute bottom-6 left-6 z-30 flex items-center gap-4 font-mono text-[9.5px] uppercase tracking-[0.18em] text-zinc-600">
-            <span className="flex items-center gap-1.5">
-              <span className="size-[7px] rounded-full bg-[#7FA3F2]" /> memory
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="size-[7px] rounded-full bg-[#F0A6C0]" /> evolved
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="size-[7px] rounded-full bg-[#B48CFF]" /> inferred
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="size-[7px] rounded-full bg-[#EFD98B]" /> identity
-            </span>
+          <div className="glass-chip pointer-events-none absolute bottom-6 left-6 z-30 flex flex-col gap-2 rounded-2xl px-4 py-3 text-[11px] text-zinc-400">
+            {(
+              [
+                ["#6C9BF0", "remembered"],
+                ["#EF7FB4", "changed its mind"],
+                ["#A78BFA", "figured out on its own"],
+                ["#EFD98B", "who you are"],
+              ] as const
+            ).map(([c, t]) => (
+              <span key={t} className="flex items-center gap-2">
+                <span
+                  className="size-[8px] rounded-full"
+                  style={{ background: c, boxShadow: `0 0 8px 1px ${c}55` }}
+                />
+                {t}
+              </span>
+            ))}
           </div>
         </>
       )}
 
       {/* ── ledger ────────────────────────────────────────────── */}
       {view === "ledger" && (
-        <div className="absolute inset-0 overflow-y-auto pb-20 pt-24">
-          <div className="mx-auto flex w-[min(92vw,620px)] flex-col gap-8">
-            <section>
-              <h2 className="mb-4 font-mono text-[10px] uppercase tracking-[0.3em] text-amber-200/80">
-                open — what you owe
-              </h2>
-              {!ledger ? (
-                <p className="font-mono text-[11px] text-zinc-600">reading the ledger…</p>
-              ) : ledger.open.length === 0 ? (
-                <div className="glass rounded-3xl p-6 text-center">
-                  <p className="text-[14px] font-light text-zinc-300">The ledger is clear.</p>
-                  <p className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-600">
-                    promise something — it lands here
-                  </p>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  {ledger.open.map((c) => (
-                    <div
-                      key={c.id}
-                      className="glass flex items-center gap-4 rounded-2xl px-5 py-4"
-                    >
-                      <span
+        <div className="absolute inset-0 overflow-y-auto pb-24 pt-24">
+          <div className="mx-auto flex w-[min(92vw,600px)] flex-col gap-7">
+            <div>
+              <h1 className="text-[26px] font-light tracking-tight text-zinc-50">
+                The ledger
+              </h1>
+              <p className="mt-1 text-[13.5px] text-zinc-500">
+                {!ledger
+                  ? "reading…"
+                  : openCount === 0
+                    ? "Nothing owed. Promise something out loud — it lands here."
+                    : `${openCount} open promise${openCount === 1 ? "" : "s"}${
+                        lateCount > 0 ? ` — ${lateCount} overdue` : ""
+                      }. Check them off, or just tell me you did it.`}
+              </p>
+            </div>
+
+            {groups.map((g) => (
+              <section key={g.title}>
+                <h2
+                  className={`mb-2.5 flex items-baseline gap-2 font-mono text-[10.5px] uppercase tracking-[0.25em] ${g.accent}`}
+                >
+                  {g.title}
+                  <span className="text-zinc-600">{g.items.length}</span>
+                </h2>
+                <div className="glass divide-y divide-white/[0.055] rounded-2xl">
+                  {g.items.map((c) => {
+                    const due = c.due ? fmtDue(c.due, today) : null;
+                    return (
+                      <div
+                        key={c.id}
                         className={
-                          "size-[8px] shrink-0 rounded-full " +
-                          (c.overdue
-                            ? "bg-red-400 shadow-[0_0_10px_2px_rgb(248_113_113/0.5)]"
-                            : "bg-amber-300 shadow-[0_0_10px_2px_rgb(252_211_77/0.35)]")
+                          "flex items-center gap-3.5 px-5 py-3.5 transition-opacity duration-500 " +
+                          (closing === c.id ? "opacity-30" : "")
                         }
-                      />
-                      <p className="flex-1 text-[13.5px] leading-relaxed text-zinc-200">
-                        {c.content}
-                      </p>
-                      {c.due && (
-                        <span
-                          className={
-                            "shrink-0 rounded-full px-2.5 py-1 font-mono text-[10px] tracking-[0.1em] " +
-                            (c.overdue
-                              ? "bg-red-500/15 text-red-300"
-                              : c.dueToday
-                                ? "bg-amber-400/15 text-amber-200"
-                                : "bg-white/[0.06] text-zinc-400")
-                          }
-                        >
-                          {c.overdue ? "overdue" : c.dueToday ? "today" : c.due}
-                        </span>
-                      )}
-                      <button
-                        onClick={() => completeItem(c.id)}
-                        className="glass-chip shrink-0 rounded-full px-3.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-zinc-300 transition-all hover:border-emerald-300/40 hover:text-emerald-200"
                       >
-                        done
-                      </button>
-                    </div>
-                  ))}
+                        <button
+                          onClick={() => completeItem(c.id)}
+                          disabled={closing === c.id}
+                          aria-label="Mark done"
+                          title="Mark done"
+                          className="group grid size-[20px] shrink-0 place-items-center rounded-full border border-white/25 transition-all hover:border-emerald-300/80 hover:bg-emerald-300/15"
+                        >
+                          <span className="text-[11px] leading-none text-emerald-300 opacity-0 transition-opacity group-hover:opacity-100">
+                            ✓
+                          </span>
+                        </button>
+                        <p className="flex-1 text-[14.5px] leading-relaxed text-zinc-100">
+                          {c.content}
+                        </p>
+                        {due && (
+                          <span
+                            className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ${DUE_TONE[due.tone]}`}
+                            title={c.due ?? undefined}
+                          >
+                            {due.text}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
-            </section>
+              </section>
+            ))}
+
+            {ledger && openCount === 0 && (
+              <div className="glass rounded-3xl p-8 text-center">
+                <p className="text-[15px] font-light text-zinc-200">The ledger is clear.</p>
+                <p className="mt-1.5 text-[12.5px] text-zinc-500">
+                  Say “remind me to…” and it shows up here, dated.
+                </p>
+              </div>
+            )}
 
             {ledger && ledger.done.length > 0 && (
               <section>
-                <h2 className="mb-4 font-mono text-[10px] uppercase tracking-[0.3em] text-zinc-600">
-                  done — it stays done
-                </h2>
-                <div className="flex flex-col gap-2">
-                  {ledger.done.map((c) => (
-                    <div key={c.id} className="flex items-center gap-4 px-5 py-2 opacity-60">
-                      <span className="size-[7px] shrink-0 rounded-full bg-emerald-400/70" />
-                      <p className="flex-1 text-[13px] leading-relaxed text-zinc-500 line-through decoration-zinc-600">
-                        {c.content}
-                      </p>
-                      {c.completedAt && (
-                        <span className="shrink-0 font-mono text-[10px] text-zinc-600">
-                          {c.completedAt}
+                <button
+                  onClick={() => setShowDone((s) => !s)}
+                  className="mb-2.5 flex items-baseline gap-2 font-mono text-[10.5px] uppercase tracking-[0.25em] text-emerald-300/70 transition-colors hover:text-emerald-200"
+                >
+                  kept <span className="text-zinc-600">{ledger.done.length}</span>
+                  <span className="text-zinc-600">{showDone ? "▾" : "▸"}</span>
+                </button>
+                {showDone && (
+                  <div className="flex flex-col">
+                    {ledger.done.map((c) => (
+                      <div key={c.id} className="flex items-center gap-3.5 px-5 py-2">
+                        <span className="grid size-[20px] shrink-0 place-items-center rounded-full bg-emerald-400/15 text-[11px] leading-none text-emerald-300/80">
+                          ✓
                         </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                        <p className="flex-1 text-[13.5px] leading-relaxed text-zinc-500 line-through decoration-zinc-700">
+                          {c.content}
+                        </p>
+                        {c.completedAt && (
+                          <span className="shrink-0 text-[11px] text-zinc-600">
+                            {prettyDate(c.completedAt)}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
           </div>
@@ -602,103 +758,174 @@ export default function Brain() {
 
       {/* ── captures — every memory with its envelope ─────────── */}
       {view === "captures" && (
-        <div className="absolute inset-0 overflow-y-auto pb-20 pt-24">
-          <div className="mx-auto flex w-[min(92vw,680px)] flex-col gap-3">
+        <div className="absolute inset-0 overflow-y-auto pb-24 pt-24">
+          <div className="mx-auto flex w-[min(92vw,640px)] flex-col gap-6">
+            <div>
+              <h1 className="text-[26px] font-light tracking-tight text-zinc-50">Captures</h1>
+              <p className="mt-1 text-[13.5px] text-zinc-500">
+                Everything you&apos;ve told me, with the envelope it was written in.
+              </p>
+            </div>
+
+            {captures && captures.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  onClick={() => setTypeFilter(null)}
+                  className={
+                    "rounded-full px-3 py-1.5 text-[11.5px] font-medium transition-all " +
+                    (!typeFilter
+                      ? "bg-white/10 text-zinc-100"
+                      : "text-zinc-500 hover:text-zinc-200")
+                  }
+                >
+                  all <span className="font-mono text-[10px] opacity-60">{captures.length}</span>
+                </button>
+                {typeCounts.map(([t, n]) => {
+                  const color = TYPE_COLORS[t] ?? TYPE_COLORS.memory;
+                  const active = typeFilter === t;
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => setTypeFilter(active ? null : t)}
+                      className={
+                        "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-medium transition-all " +
+                        (active ? "bg-white/10 text-zinc-100" : "text-zinc-500 hover:text-zinc-200")
+                      }
+                    >
+                      <span className="size-[7px] rounded-full" style={{ background: color }} />
+                      {t} <span className="font-mono text-[10px] opacity-60">{n}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {!captures ? (
-              <p className="text-center font-mono text-[11px] text-zinc-600">
-                opening the archive…
-              </p>
+              <p className="text-[13px] text-zinc-600">opening the archive…</p>
             ) : captures.length === 0 ? (
-              <p className="text-center text-[14px] font-light text-zinc-400">
-                Nothing captured yet.
-              </p>
+              <p className="text-[14px] font-light text-zinc-400">Nothing captured yet.</p>
             ) : (
-              captures.map((c) => {
-                const type = String(c.meta.type ?? "memory");
-                const color = TYPE_COLORS[type] ?? TYPE_COLORS.memory;
-                const salience =
-                  typeof c.meta.salience === "number" ? (c.meta.salience as number) : null;
-                const hints = hintsFor[c.id];
-                return (
-                  <article key={c.id} className="glass rounded-2xl px-5 py-4">
-                    <div className="flex items-center gap-3">
-                      <span
-                        className="rounded-full px-2.5 py-1 font-mono text-[9.5px] uppercase tracking-[0.18em]"
-                        style={{ background: `${color}22`, color }}
-                      >
-                        {type}
-                      </span>
-                      {typeof c.meta.provenance === "string" &&
-                        c.meta.provenance !== "stated" && (
-                          <span className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-violet-300/80">
-                            {c.meta.provenance}
-                          </span>
-                        )}
-                      {typeof c.meta.storyDate === "string" && (
-                        <span className="font-mono text-[9.5px] tracking-[0.1em] text-zinc-500">
-                          ⌁ {c.meta.storyDate}
-                        </span>
-                      )}
-                      {typeof c.meta.due === "string" && (
-                        <span className="font-mono text-[9.5px] tracking-[0.1em] text-amber-200/80">
-                          due {c.meta.due}
-                        </span>
-                      )}
-                      {c.meta.redacted === true && (
-                        <span className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-red-300/70">
-                          redacted
-                        </span>
-                      )}
-                      <span className="ml-auto flex items-center gap-3">
-                        {salience !== null && <SalienceBar value={salience} />}
-                        <span className="font-mono text-[9.5px] text-zinc-600">
-                          {c.createdAt ? timeAgo(c.createdAt) : ""}
-                        </span>
-                      </span>
-                    </div>
-                    <p className="mt-2.5 text-[13.5px] leading-relaxed text-zinc-200">
-                      {c.text.length > 300 ? `${c.text.slice(0, 300)}…` : c.text}
-                    </p>
-                    {typeof c.meta.entities === "string" && (
-                      <div className="mt-2.5 flex flex-wrap gap-1.5">
-                        {(c.meta.entities as string).split(", ").map((e) => (
-                          <span
-                            key={e}
-                            className="rounded-full bg-white/[0.05] px-2 py-0.5 font-mono text-[9.5px] tracking-[0.08em] text-zinc-400"
-                          >
-                            {e}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <div className="mt-3 border-t border-white/[0.05] pt-2.5">
-                      {hints === undefined ? (
-                        <button
-                          onClick={() => revealHints(c)}
-                          className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-600 transition-colors hover:text-indigo-300"
+              dayGroups.map((g) => (
+                <section key={g.day}>
+                  <h2 className="mb-3 font-mono text-[10.5px] uppercase tracking-[0.25em] text-zinc-500">
+                    {g.day}
+                  </h2>
+                  <div className="relative ml-[5px] flex flex-col gap-2.5 border-l border-white/[0.08] pl-5">
+                    {g.items.map((c) => {
+                      const type = String(c.meta.type ?? "memory");
+                      const color = TYPE_COLORS[type] ?? TYPE_COLORS.memory;
+                      const salience =
+                        typeof c.meta.salience === "number" ? (c.meta.salience as number) : null;
+                      const hints = hintsFor[c.id];
+                      const long = c.text.length > 260;
+                      const open = expanded[c.id];
+                      const entities =
+                        typeof c.meta.entities === "string"
+                          ? (c.meta.entities as string)
+                              .split(", ")
+                              .map((e) => e.split("/")[0])
+                              .filter(Boolean)
+                          : [];
+                      const metaBits: string[] = [];
+                      if (typeof c.meta.provenance === "string" && c.meta.provenance !== "stated")
+                        metaBits.push(c.meta.provenance as string);
+                      if (
+                        typeof c.meta.storyDate === "string" &&
+                        c.meta.storyDate !== c.meta.due
+                      )
+                        metaBits.push(`about ${c.meta.storyDate as string}`);
+                      if (typeof c.meta.due === "string")
+                        metaBits.push(`due ${c.meta.due as string}`);
+                      if (c.meta.redacted === true) metaBits.push("secrets stripped");
+                      return (
+                        <article
+                          key={c.id}
+                          className="relative rounded-xl border border-white/[0.08] bg-white/[0.035] px-4 py-3.5"
                         >
-                          ⌕ also answers…
-                        </button>
-                      ) : hints.length === 0 ? (
-                        <p className="font-mono text-[10px] tracking-[0.1em] text-zinc-600">
-                          no hints on this one
-                        </p>
-                      ) : (
-                        <div className="flex flex-col gap-1">
-                          <p className="font-mono text-[9.5px] uppercase tracking-[0.2em] text-indigo-300/70">
-                            also answers
+                          <span
+                            aria-hidden
+                            className="absolute -left-[25.5px] top-[19px] size-[9px] rounded-full"
+                            style={{ background: color, boxShadow: `0 0 8px 1px ${color}55` }}
+                          />
+                          <div className="flex items-baseline gap-2.5">
+                            <span
+                              className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em]"
+                              style={{ color }}
+                            >
+                              {type}
+                            </span>
+                            {metaBits.length > 0 && (
+                              <span className="truncate text-[11px] text-zinc-500">
+                                {metaBits.join(" · ")}
+                              </span>
+                            )}
+                            <span className="ml-auto flex shrink-0 items-center gap-2.5">
+                              {salience !== null && (
+                                <span
+                                  className="h-[3px] w-8 overflow-hidden rounded-full bg-white/10"
+                                  title={`weight ${salience}`}
+                                >
+                                  <span
+                                    className="block h-full rounded-full"
+                                    style={{
+                                      width: `${Math.round(salience * 100)}%`,
+                                      background: color,
+                                    }}
+                                  />
+                                </span>
+                              )}
+                              <span className="text-[10.5px] text-zinc-600">
+                                {c.createdAt ? timeAgo(c.createdAt) : ""}
+                              </span>
+                            </span>
+                          </div>
+                          <p className="mt-2 text-[14px] leading-relaxed text-zinc-200">
+                            {long && !open ? `${c.text.slice(0, 260)}…` : c.text}
+                            {long && (
+                              <button
+                                onClick={() =>
+                                  setExpanded((x) => ({ ...x, [c.id]: !open }))
+                                }
+                                className="ml-1.5 text-[12px] text-zinc-500 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-300"
+                              >
+                                {open ? "less" : "more"}
+                              </button>
+                            )}
                           </p>
-                          {hints.map((h, i) => (
-                            <p key={i} className="text-[12.5px] italic leading-relaxed text-zinc-400">
-                              “{h}”
-                            </p>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </article>
-                );
-              })
+                          {(entities.length > 0 || hints !== undefined || true) && (
+                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                              {entities.map((e) => (
+                                <span key={e} className="text-[11.5px] text-zinc-500">
+                                  ◦ {e}
+                                </span>
+                              ))}
+                              {hints === undefined ? (
+                                <button
+                                  onClick={() => revealHints(c)}
+                                  className="text-[11.5px] text-zinc-600 transition-colors hover:text-indigo-300"
+                                >
+                                  also answers ›
+                                </button>
+                              ) : hints.length === 0 ? (
+                                <span className="text-[11.5px] text-zinc-700">no hints</span>
+                              ) : null}
+                            </div>
+                          )}
+                          {hints !== undefined && hints.length > 0 && (
+                            <div className="mt-2 flex flex-col gap-1 border-t border-white/[0.05] pt-2">
+                              {hints.map((h, i) => (
+                                <p key={i} className="text-[12.5px] italic text-zinc-400">
+                                  “{h}”
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))
             )}
           </div>
         </div>

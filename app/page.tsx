@@ -49,7 +49,10 @@ export default function Home() {
     fetch("/api/profile")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        const facts: string[] = d?.profile?.static ?? [];
+        const facts: string[] = [
+          ...(d?.profile?.static ?? []),
+          ...(d?.profile?.dynamic ?? []),
+        ];
         // only the user's own name — not the landlord's, not the sister's
         const m = facts.join(" ").match(/(?:user'?s?|my) name is (\w+)/i);
         if (m) setName(m[1]);
