@@ -225,22 +225,24 @@ function VoiceCore({
       const items = agendaData.commitments as AgendaItem[];
       const urgent = items.find((c) => c.overdue || c.dueToday) ?? items.find((c) => c.due);
       const namePart = greetingName ? `, ${greetingName}` : "";
+      const hour = new Date().getHours();
+      const hi = hour < 5 ? `Still up${namePart}?` : `Hey${namePart}.`;
       const dueDay = (d: string) =>
         new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { weekday: "long" });
       const opening =
         memoryCount === 0
-          ? `${greeting}${namePart}. We haven't really met — I'm Recall, your second brain. Tell me a bit about yourself and you'll watch me start remembering.`
+          ? `${hi} We haven't met — I'm Recall. Whatever you tell me, I keep. So: who are you?`
           : urgent
-            ? `${greeting}${namePart}. One thing on the ledger: ${urgent.content.replace(/\.$/, "")}${
+            ? `${hi} Before I forget — ${urgent.content.split(/(?<=[.!?])\s/)[0].replace(/\.$/, "")}${
                 urgent.overdue
-                  ? " — that's overdue."
+                  ? ". That one's overdue."
                   : urgent.dueToday
-                    ? " — that's due today."
+                    ? ". That's today, by the way."
                     : urgent.due
-                      ? ` — due ${dueDay(urgent.due)}.`
+                      ? `, due ${dueDay(urgent.due)}.`
                       : "."
               } What's on your mind?`
-            : `${greeting}${namePart}. Everything you've told me is loaded. What's on your mind?`;
+            : `${hi} ${memoryCount} memories and counting. What's new?`;
 
       conversation.startSession({
         signedUrl: data.signedUrl,
@@ -275,16 +277,28 @@ function VoiceCore({
               if (!stat.length && !dyn.length) return "The profile is empty so far.";
               return `Stable facts:\n${stat.join("\n")}\n\nRight now:\n${dyn.join("\n")}`;
             }),
-          add_memory: ({ content, kind, due }: { content: string; kind?: string; due?: string }) =>
-            track("remembering", async () => {
-              await postJson("/api/capture", {
-                content,
-                kind: kind ?? "memory",
-                due,
-                source: "recall-voice",
-              });
-              return "Saved. The user can watch it join their constellation.";
-            }),
+          // fire-and-forget: the agent never waits on the enricher. The
+          // chip shows the save; a failure comes back as a contextual
+          // update so the agent can own it honestly.
+          add_memory: ({ content, kind, due }: { content: string; kind?: string; due?: string }) => {
+            const id = ++seq.current;
+            setActivity((a) => [...a, { id, label: "remembering" }]);
+            void postJson("/api/capture", {
+              content,
+              kind: kind ?? "memory",
+              due,
+              source: "recall-voice",
+            })
+              .catch((e) => {
+                try {
+                  conversation.sendContextualUpdate(
+                    `That last save actually failed (${e instanceof Error ? e.message : "engine error"}). Tell the user their memory didn't stick and offer to try again.`,
+                  );
+                } catch {}
+              })
+              .finally(() => setActivity((a) => a.filter((x) => x.id !== id)));
+            return "Saved. Do not mention or announce the save — just keep the conversation going.";
+          },
           preview_forget: ({ about }: { about: string }) =>
             track("previewing forget", async () => {
               const data = await postJson("/api/forget", { query: about, dryRun: true });
