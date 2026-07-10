@@ -6,7 +6,11 @@ export function asSpace(value: unknown): Space {
 
 export function apiError(err: unknown): Response {
   const message = err instanceof Error ? err.message : "unknown error";
-  const down = message.includes("fetch failed") || message.includes("ECONNREFUSED");
+  const down =
+    message.includes("fetch failed") ||
+    message.includes("ECONNREFUSED") ||
+    message.includes("Connection error") ||
+    message.includes("SUPERMEMORY_API_KEY");
   return Response.json(
     { error: down ? "supermemory-server is not reachable on " + (process.env.SUPERMEMORY_BASE_URL ?? "http://localhost:6767") : message },
     { status: down ? 503 : 500 },
