@@ -93,6 +93,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch; state lands after await, no cascade
     refresh();
     const t = setInterval(() => {
       if (!document.hidden) refresh();
@@ -173,7 +174,7 @@ export default function Home() {
       </header>
 
       {/* the voice — the main event */}
-      <VoicePanel engine={engine} greetingName={name} />
+      <VoicePanel engine={engine} greetingName={name} memoryCount={entries.length} />
 
       {/* film grain over the whole scene */}
       <div

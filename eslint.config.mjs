@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // eve agent runtime state — generated, never hand-written
+    ".eve/**",
+    ".workflow-data/**",
   ]),
 ]);
 

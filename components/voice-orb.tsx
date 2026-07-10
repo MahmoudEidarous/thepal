@@ -224,8 +224,10 @@ export function VoiceOrb({
   const stateRef = useRef(state);
   const getLevelRef = useRef(getLevel);
   const [fallback, setFallback] = useState(false);
-  stateRef.current = state;
-  getLevelRef.current = getLevel;
+  useEffect(() => {
+    stateRef.current = state;
+    getLevelRef.current = getLevel;
+  }, [state, getLevel]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

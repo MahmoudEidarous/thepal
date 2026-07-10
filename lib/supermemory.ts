@@ -1,9 +1,13 @@
 import Supermemory from "supermemory";
 
 // Server-side only — the sm_ key must never reach the browser.
+// 10s timeout: a wedged engine must surface as 503, not hang the route
+// (the feed polls every 3s; hung requests would pile up fast).
 export const supermemory = new Supermemory({
   apiKey: process.env.SUPERMEMORY_API_KEY!,
   baseURL: process.env.SUPERMEMORY_BASE_URL ?? "http://localhost:6767",
+  timeout: 10_000,
+  maxRetries: 1,
 });
 
 export { SPACES, spaceTag } from "./spaces";
@@ -20,6 +24,7 @@ export async function smRequest<T>(method: string, path: string, body: unknown):
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
     throw new Error(`supermemory ${path} ${res.status}: ${await res.text()}`);

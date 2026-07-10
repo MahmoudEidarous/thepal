@@ -42,6 +42,7 @@ export function DreamPopover() {
 
   useEffect(() => {
     aliveRef.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch; state lands after await, no cascade
     load().then((b) => {
       knownIds.current = new Set(b.map((x) => x.id));
     });

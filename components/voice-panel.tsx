@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import { VoiceOrb, type OrbState } from "./voice-orb";
 
@@ -45,12 +45,19 @@ function EndIcon() {
   );
 }
 
+function subscribeResize(cb: () => void) {
+  window.addEventListener("resize", cb);
+  return () => window.removeEventListener("resize", cb);
+}
+
 function VoiceCore({
   engine,
   greetingName,
+  memoryCount,
 }: {
   engine: Engine;
   greetingName?: string;
+  memoryCount: number;
 }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
@@ -63,10 +70,32 @@ function VoiceCore({
   useEffect(() => {
     const f = new URLSearchParams(window.location.search).get("orb");
     if (f && ["idle", "connecting", "listening", "speaking", "thinking"].includes(f))
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time URL read after hydration
       setForced(f as OrbState);
   }, []);
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
+
+  // the orb scales to the window — never overflows a small screen
+  const orbSize = useSyncExternalStore(
+    subscribeResize,
+    () =>
+      Math.max(
+        240,
+        Math.min(420, Math.round(window.innerWidth * 0.88), Math.round(window.innerHeight * 0.58)),
+      ),
+    () => 420,
+  );
+
+  // Escape closes the approval sheet the safe way — nothing gets deleted
+  useEffect(() => {
+    if (!pending) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") pending.resolve(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pending]);
 
   const conversation = useConversation({
     onMessage: ({ message, role }) =>
@@ -75,7 +104,9 @@ function VoiceCore({
   });
   const { status, isSpeaking } = conversation;
   const connected = status === "connected";
-  isSpeakingRef.current = isSpeaking;
+  useEffect(() => {
+    isSpeakingRef.current = isSpeaking;
+  }, [isSpeaking]);
 
   const getLevel = useCallback(() => {
     try {
@@ -219,7 +250,7 @@ function VoiceCore({
       {/* the orb — dead center of everything, and the only button you need */}
       <div className="pointer-events-none absolute left-1/2 top-[44%] z-10 -translate-x-1/2 -translate-y-1/2">
         <div className="pointer-events-auto">
-          <VoiceOrb state={orbState} getLevel={getLevel} onClick={wake} size={420} />
+          <VoiceOrb state={orbState} getLevel={getLevel} onClick={wake} size={orbSize} />
         </div>
       </div>
 
@@ -238,14 +269,17 @@ function VoiceCore({
         {!connected && status !== "connecting" && (
           <div className="pointer-events-auto flex flex-col items-center gap-4">
             <p className="text-[17px] font-light tracking-[0.01em] text-zinc-300">
-              {greeting}
-              {greetingName ? `, ${greetingName}` : ""}.
+              {memoryCount === 0
+                ? "Your sky is empty."
+                : `${greeting}${greetingName ? `, ${greetingName}` : ""}.`}
             </p>
             <button
               onClick={wake}
               className="animate-hint font-mono text-[10px] uppercase tracking-[0.42em] text-zinc-600 transition-colors duration-300 hover:text-zinc-300"
             >
-              tap the orb to talk
+              {memoryCount === 0
+                ? "tap the orb — tell it something worth keeping"
+                : "tap the orb to talk"}
             </button>
           </div>
         )}
@@ -362,7 +396,11 @@ function VoiceCore({
   );
 }
 
-export function VoicePanel(props: { engine: Engine; greetingName?: string }) {
+export function VoicePanel(props: {
+  engine: Engine;
+  greetingName?: string;
+  memoryCount: number;
+}) {
   return (
     <ConversationProvider>
       <VoiceCore {...props} />
