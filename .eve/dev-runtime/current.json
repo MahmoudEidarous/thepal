@@ -1,0 +1,7 @@
+{
+  "appRoot": "/Users/mahmoudaidaros/Projects/sphackathon",
+  "kind": "eve-dev-runtime-artifacts-pointer",
+  "runtimeAppRoot": "/Users/mahmoudaidaros/Projects/sphackathon/.eve/dev-runtime/snapshots/mreaifzn-bf2ca7b2-394c-43ad-810a-0a3df00cd689/source",
+  "snapshotRoot": "/Users/mahmoudaidaros/Projects/sphackathon/.eve/dev-runtime/snapshots/mreaifzn-bf2ca7b2-394c-43ad-810a-0a3df00cd689",
+  "version": 2
+}

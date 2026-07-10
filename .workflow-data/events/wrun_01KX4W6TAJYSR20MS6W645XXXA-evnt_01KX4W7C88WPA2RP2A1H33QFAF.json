@@ -1,0 +1,16 @@
+{
+  "eventType": "step_completed",
+  "specVersion": 5,
+  "correlationId": "step_01KX4W6TAJDX52TCZHPHSPJPDF",
+  "eventData": {
+    "stepName": "step//eve@0.22.3//sendTurnControlStep",
+    "workflowName": "workflow//eve//turnWorkflow",
+    "result": {
+      "__type": "Uint8Array",
+      "data": "ZGV2bC0x"
+    }
+  },
+  "runId": "wrun_01KX4W6TAJYSR20MS6W645XXXA",
+  "eventId": "evnt_01KX4W7C88WPA2RP2A1H33QFAF",
+  "createdAt": "2026-07-10T02:03:09.448Z"
+}
