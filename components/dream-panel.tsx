@@ -5,14 +5,15 @@ import { timeAgo } from "@/lib/format";
 
 type Briefing = { id: string; content: string; createdAt?: string };
 
-// Briefings always live in the personal space — that's where the nightly
-// schedule writes them — so this panel reads personal regardless of the
-// space selected in the header.
+// The one dark element on the page, on purpose: Dreaming is the night
+// side of Recall. Briefings always live in the personal space — that's
+// where the nightly schedule writes them.
 export function DreamPanel() {
   const [briefings, setBriefings] = useState<Briefing[]>([]);
   const [dreaming, setDreaming] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [voice, setVoice] = useState<"idle" | "loading" | "playing">("idle");
+  const [expanded, setExpanded] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
   const aliveRef = useRef(true);
@@ -38,7 +39,6 @@ export function DreamPanel() {
     });
     return () => {
       aliveRef.current = false;
-      // Silence any playback the panel leaves behind.
       audioRef.current?.pause();
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
     };
@@ -54,8 +54,6 @@ export function DreamPanel() {
         setNotice("Couldn't wake the agent — is the dev server running?");
         return;
       }
-      // The dream session runs in the background; poll until the new
-      // briefing lands (agent writes it via add_memory, kind: briefing).
       for (let i = 0; i < 40; i++) {
         await new Promise((r) => setTimeout(r, 3000));
         if (!aliveRef.current) return;
@@ -111,78 +109,72 @@ export function DreamPanel() {
   const latest = briefings[0];
 
   return (
-    <section className="overflow-hidden rounded-[1.25rem] border border-zinc-800 bg-[#14131d] text-zinc-100 shadow-[0_1px_2px_rgba(0,0,0,0.2),0_16px_40px_-12px_rgba(20,19,29,0.5)]">
-      <div className="flex items-center justify-between gap-3 px-6 pt-5">
-        <h2 className="text-[15px] font-semibold tracking-tight">
-          Dreaming <span className="font-normal text-zinc-500">· your memory works while you sleep</span>
-        </h2>
+    <section className="overflow-hidden rounded-2xl bg-[linear-gradient(160deg,#111019_0%,#15131f_55%,#131223_100%)] p-6 text-zinc-200 shadow-[0_20px_60px_-24px_rgb(19_18_35/0.7)]">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-indigo-300/80">
+            dreaming
+          </h2>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-zinc-500">
+            your memory works while you sleep
+          </p>
+        </div>
         <button
           onClick={dream}
           disabled={dreaming}
-          className="pill shrink-0 border border-zinc-700 bg-zinc-800/80 text-zinc-200 hover:border-zinc-500 disabled:opacity-50"
+          className="shrink-0 rounded-full border border-white/[0.08] bg-white/[0.04] px-4 py-1.5 text-[12.5px] font-medium text-zinc-300 transition-colors hover:border-white/[0.2] hover:text-white disabled:opacity-40"
         >
           {dreaming ? "Dreaming…" : "Dream now"}
         </button>
       </div>
 
-      <div className="px-6 pb-6 pt-4">
+      <div className="mt-5">
         {dreaming && !latest && (
-          <p className="animate-pulse font-mono text-[12px] tracking-wide text-indigo-300">
+          <p className="animate-pulse font-mono text-[11.5px] tracking-wide text-indigo-300/90">
             walking through your recent memories…
           </p>
         )}
         {!latest && !dreaming && (
           <p className="text-[13.5px] leading-relaxed text-zinc-500">
-            Every night at 3:00 the agent reads your recent memories, finds connections you missed,
-            checks your commitments, and writes a morning briefing. Press{" "}
-            <span className="text-zinc-300">Dream now</span> to run tonight&apos;s dream early.
+            Every night at 3:00 the agent reads your recent memories, finds connections you
+            missed, and writes a morning briefing — or ask the orb for it out loud.
           </p>
         )}
         {latest && (
           <div className="animate-rise">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <span className="font-mono text-[11px] uppercase tracking-wider text-indigo-300">
-                morning briefing · {timeAgo(latest.createdAt)}
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-mono text-[10.5px] uppercase tracking-[0.15em] text-zinc-500">
+                briefing · {timeAgo(latest.createdAt)}
               </span>
               <button
                 onClick={() => speak(latest.content)}
-                className="pill shrink-0 border border-zinc-700 text-[12px] text-zinc-300 hover:border-zinc-500"
+                className="shrink-0 text-[12.5px] font-medium text-indigo-300 transition-colors hover:text-indigo-200"
               >
-                {voice === "idle" ? "▶ Hear it" : voice === "loading" ? "waking the voice…" : "◼ Stop"}
+                {voice === "idle" ? "▶ hear it" : voice === "loading" ? "waking…" : "◼ stop"}
               </button>
             </div>
-            <p className="whitespace-pre-wrap text-[14.5px] leading-relaxed text-zinc-200">
+            <p
+              className={
+                "mt-3 whitespace-pre-wrap text-[13.5px] leading-relaxed text-zinc-300 " +
+                (expanded ? "" : "line-clamp-6")
+              }
+            >
               {latest.content}
             </p>
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="mt-2 text-[12px] text-zinc-500 transition-colors hover:text-zinc-300"
+            >
+              {expanded ? "less" : "read all"}
+            </button>
           </div>
         )}
         {dreaming && latest && (
-          <p className="mt-3 animate-pulse font-mono text-[12px] tracking-wide text-indigo-300">
+          <p className="mt-3 animate-pulse font-mono text-[11.5px] tracking-wide text-indigo-300/90">
             dreaming a fresh briefing…
           </p>
         )}
-        {notice && (
-          <p className="mt-3 rounded-xl bg-zinc-800/60 px-4 py-2.5 text-[13px] text-zinc-400">
-            {notice}
-          </p>
-        )}
-
-        {briefings.length > 1 && (
-          <div className="mt-5 border-t border-zinc-800 pt-4">
-            <p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-zinc-600">
-              earlier dreams
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {briefings.slice(1).map((b) => (
-                <p key={b.id} className="truncate text-[13px] text-zinc-500">
-                  <span className="font-mono text-[11px] text-zinc-600">{timeAgo(b.createdAt)}</span>
-                  {" · "}
-                  {b.content}
-                </p>
-              ))}
-            </div>
-          </div>
-        )}
+        {notice && <p className="mt-3 text-[12.5px] text-zinc-500">{notice}</p>}
       </div>
     </section>
   );

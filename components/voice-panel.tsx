@@ -44,7 +44,7 @@ function VoiceCore({
   const [greeting, setGreeting] = useState("Hello.");
   const seq = useRef(0);
   const spaceSetByTool = useRef(false);
-  const levelHost = useRef<HTMLDivElement | null>(null);
+  const isSpeakingRef = useRef(false);
 
   const conversation = useConversation({
     onMessage: ({ message, role }) =>
@@ -53,6 +53,7 @@ function VoiceCore({
   });
   const { status, isSpeaking } = conversation;
   const connected = status === "connected";
+  isSpeakingRef.current = isSpeaking;
 
   useEffect(() => {
     const h = new Date().getHours();
@@ -63,7 +64,7 @@ function VoiceCore({
     spaceRef.current = space;
   }, [space]);
 
-  // Tell the live agent when the user changes space by hand (clicks a pill).
+  // Tell the live agent when the user changes space by hand.
   useEffect(() => {
     if (spaceSetByTool.current) {
       spaceSetByTool.current = false;
@@ -77,31 +78,18 @@ function VoiceCore({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [space]);
 
-  // Audio-reactive orb: input volume while listening, output while speaking.
-  useEffect(() => {
-    const host = levelHost.current;
-    if (!host) return;
-    if (!connected) {
-      host.style.setProperty("--lvl", "0");
-      return;
+  const getLevel = useCallback(() => {
+    try {
+      return isSpeakingRef.current
+        ? conversation.getOutputVolume()
+        : conversation.getInputVolume();
+    } catch {
+      return 0;
     }
-    let raf = 0;
-    const tick = () => {
-      let lvl = 0;
-      try {
-        lvl = isSpeaking ? conversation.getOutputVolume() : conversation.getInputVolume();
-      } catch {
-        /* audio graph not ready yet */
-      }
-      host.style.setProperty("--lvl", String(Math.min(1, lvl * 2.2)));
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected, isSpeaking]);
+  }, []);
 
-  // Every tool the agent runs shows up as a visible chip while it works.
+  // Every tool the agent runs shows up as visible activity while it works.
   // Tools never throw — a thrown client tool tears down the whole session,
   // so failures are returned to the agent as text it can speak about.
   const track = useCallback(async (label: string, fn: () => Promise<string>): Promise<string> => {
@@ -251,94 +239,87 @@ function VoiceCore({
   const lastUser = [...lines].reverse().find((l) => l.role === "user");
 
   return (
-    <section ref={levelHost} className="card relative flex flex-col items-center px-6 pb-6 pt-10 text-center">
-      <VoiceOrb state={orbState} onClick={wake} />
+    <section className="relative flex min-h-[calc(100dvh-11rem)] flex-col items-center justify-center py-10 text-center">
+      <VoiceOrb state={orbState} getLevel={getLevel} onClick={wake} />
 
-      <p className="mt-6 font-mono text-[11px] uppercase tracking-wider text-zinc-400">
+      <p className="mt-2 h-4 font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400">
         {orbState === "idle"
-          ? "tap the orb to talk"
+          ? ""
           : orbState === "connecting"
-            ? "connecting…"
+            ? "waking"
             : activity.length > 0
-              ? activity[activity.length - 1].label + "…"
+              ? activity[activity.length - 1].label
               : orbState}
       </p>
 
-      {!connected && !error && (
-        <div className="mt-4 max-w-md">
-          <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
-            {greeting} <span className="text-zinc-400">Just talk.</span>
+      {!connected && (
+        <div className="mt-6 max-w-xl">
+          <h1 className="text-[clamp(28px,4.5vw,40px)] font-semibold leading-[1.1] tracking-[-0.02em] text-zinc-900">
+            {greeting}
+            <span className="text-zinc-400"> Just talk.</span>
           </h1>
-          <p className="mt-2 text-[14px] leading-relaxed text-zinc-400">
-            Recall listens, remembers what matters, recalls what you&apos;ve forgotten, and
-            forgets only with your approval — every memory stays on this machine.
+          <p className="mx-auto mt-4 max-w-md text-[15px] leading-relaxed text-zinc-500">
+            Recall listens, remembers what matters, and forgets only with your
+            approval. Every memory stays on this machine.
           </p>
+          <button
+            onClick={wake}
+            className="mt-8 rounded-full bg-zinc-900 px-7 py-3 text-[14px] font-medium text-white transition-all hover:bg-zinc-700 hover:shadow-[0_8px_30px_-8px_rgb(37_99_235/0.5)]"
+          >
+            Start talking
+          </button>
         </div>
       )}
 
       {connected && (
-        <div className="mt-4 flex min-h-[76px] max-w-lg flex-col items-center gap-2">
+        <div className="mt-6 flex min-h-[96px] w-full max-w-xl flex-col items-center gap-3 px-4">
           {lastUser && (
-            <p className="text-[13px] leading-relaxed text-zinc-400">“{lastUser.text}”</p>
+            <p className="text-[13px] leading-relaxed text-zinc-400">{lastUser.text}</p>
           )}
           {lastAgent && (
-            <p className="animate-rise text-[16.5px] leading-relaxed text-zinc-800">
+            <p className="animate-rise text-[18px] leading-relaxed tracking-[-0.01em] text-zinc-800">
               {lastAgent.text}
             </p>
           )}
         </div>
       )}
 
-      {activity.length > 0 && (
-        <div className="mt-3 flex flex-wrap justify-center gap-1.5">
-          {activity.map((a) => (
-            <span
-              key={a.id}
-              className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-mono text-[11px] tracking-wide text-amber-700"
-            >
-              <span className="size-[5px] animate-pulse rounded-full bg-amber-400" />
-              {a.label}
-            </span>
-          ))}
-        </div>
-      )}
-
       {error && (
-        <p className="mt-4 rounded-xl bg-red-50 px-4 py-2.5 text-[13px] text-red-600">{error}</p>
+        <p className="mt-5 text-[13px] text-red-500">{error}</p>
       )}
       {engine === "offline" && (
-        <p className="mt-4 rounded-xl bg-amber-50 px-4 py-2.5 text-[13px] text-amber-700">
+        <p className="mt-5 text-[13px] text-amber-600">
           The memory engine is offline — the voice can talk but can&apos;t reach your memories.
         </p>
       )}
 
       {connected && (
-        <div className="mt-6 flex w-full max-w-lg items-center gap-2 border-t border-black/[0.05] pt-4">
+        <div className="mt-8 flex w-full max-w-md items-center justify-center gap-6">
           <button
             onClick={() => conversation.setMuted(!conversation.isMuted)}
             className={
-              "pill shrink-0 border " +
+              "text-[13px] font-medium transition-colors " +
               (conversation.isMuted
-                ? "border-red-200 bg-red-50 text-red-600"
-                : "border-black/[0.08] bg-white text-zinc-600 hover:border-black/[0.16]")
+                ? "text-red-500 hover:text-red-600"
+                : "text-zinc-400 hover:text-zinc-700")
             }
           >
-            {conversation.isMuted ? "mic off" : "mic on"}
+            {conversation.isMuted ? "unmute" : "mute"}
           </button>
-          <form onSubmit={sendTyped} className="flex min-w-0 flex-1 items-center gap-2">
+          <form onSubmit={sendTyped} className="min-w-0 flex-1">
             <input
               value={text}
               onChange={(e) => {
                 setText(e.target.value);
                 conversation.sendUserActivity();
               }}
-              placeholder="or type it…"
-              className="min-w-0 flex-1 bg-transparent text-[14px] text-zinc-900 outline-none placeholder:text-zinc-300"
+              placeholder="or type it"
+              className="w-full border-b border-black/[0.08] bg-transparent pb-1 text-center text-[14px] text-zinc-800 outline-none transition-colors placeholder:text-zinc-300 focus:border-black/[0.25]"
             />
           </form>
           <button
             onClick={() => void conversation.endSession()}
-            className="pill shrink-0 border border-black/[0.08] bg-white text-zinc-600 hover:border-black/[0.16]"
+            className="text-[13px] font-medium text-zinc-400 transition-colors hover:text-zinc-700"
           >
             end
           </button>
@@ -346,32 +327,39 @@ function VoiceCore({
       )}
 
       {pending && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/30 p-6 backdrop-blur-sm">
-          <div className="animate-rise w-full max-w-md rounded-2xl border border-red-100 bg-white p-6 text-left shadow-2xl">
-            <p className="text-[15px] font-semibold text-zinc-900">
-              Forget {pending.preview.length} {pending.preview.length === 1 ? "memory" : "memories"}?
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 p-6 backdrop-blur-md">
+          <div className="animate-rise w-full max-w-md rounded-2xl border border-black/[0.06] bg-white p-7 text-left shadow-[0_24px_80px_-24px_rgb(0_0_0/0.25)]">
+            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-red-500">
+              approval required
             </p>
-            <p className="mt-1 text-[13px] text-zinc-500">
-              Recall wants to permanently delete everything about “{pending.about}”. This cannot be
-              undone.
+            <p className="mt-2 text-[17px] font-semibold tracking-tight text-zinc-900">
+              Forget {pending.preview.length}{" "}
+              {pending.preview.length === 1 ? "memory" : "memories"}?
             </p>
-            <div className="mt-4 flex max-h-48 flex-col gap-1.5 overflow-y-auto border-l-2 border-red-100 pl-3.5">
+            <p className="mt-1 text-[13.5px] leading-relaxed text-zinc-500">
+              Recall wants to permanently delete everything about “{pending.about}”. This cannot
+              be undone.
+            </p>
+            <div className="mt-5 flex max-h-52 flex-col gap-2.5 overflow-y-auto">
               {pending.preview.map((m, i) => (
-                <p key={i} className="text-[13px] leading-relaxed text-zinc-500 line-through decoration-red-300">
+                <p
+                  key={i}
+                  className="border-l-2 border-red-200 pl-3 text-[13.5px] leading-relaxed text-zinc-500 line-through decoration-red-300/70"
+                >
                   {m}
                 </p>
               ))}
             </div>
-            <div className="mt-5 flex gap-2">
+            <div className="mt-6 flex gap-3">
               <button
                 onClick={() => pending.resolve(true)}
-                className="pill bg-red-600 px-5 py-2 text-white hover:opacity-85"
+                className="rounded-full bg-red-600 px-6 py-2.5 text-[13.5px] font-medium text-white transition-opacity hover:opacity-85"
               >
                 Forget them
               </button>
               <button
                 onClick={() => pending.resolve(false)}
-                className="pill border border-black/[0.1] bg-white text-zinc-600 hover:border-black/[0.2]"
+                className="rounded-full border border-black/[0.1] bg-white px-6 py-2.5 text-[13.5px] font-medium text-zinc-700 transition-colors hover:border-black/[0.25]"
               >
                 Keep
               </button>

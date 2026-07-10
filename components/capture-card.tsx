@@ -79,50 +79,46 @@ export function CaptureCard({
   }
 
   return (
-    <section className="card p-5">
+    <section>
+      <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400">
+        quick capture
+      </h2>
       <textarea
         value={content}
         onChange={(e) => setContent(e.target.value)}
         onKeyDown={(e) => {
           if ((e.metaKey || e.ctrlKey) && e.key === "Enter") remember();
         }}
-        placeholder="What's on your mind?"
-        rows={3}
-        className="w-full resize-none bg-transparent text-[17px] leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400"
+        placeholder="Paste or jot something to remember…"
+        rows={2}
+        className="mt-3 w-full resize-none border-b border-black/[0.08] bg-transparent pb-2 text-[14px] leading-relaxed text-zinc-800 outline-none transition-colors placeholder:text-zinc-300 focus:border-black/[0.25]"
       />
-
-      <div className="mt-3 flex items-center justify-between">
-        <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-400">
-          {space} · ⌘↵
-        </span>
+      <div className="mt-2.5 flex items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-zinc-300">⌘↵</span>
         <button
           onClick={remember}
           disabled={!content.trim() || sending}
-          className="pill bg-zinc-900 px-5 py-2 text-white transition-opacity hover:opacity-85 disabled:opacity-30"
+          className="text-[13px] font-medium text-zinc-500 transition-colors hover:text-zinc-900 disabled:opacity-30"
         >
-          {sending ? "Remembering…" : "Remember"}
+          {sending ? "Remembering…" : "Remember →"}
         </button>
       </div>
 
-      {error && (
-        <p className="mt-3 rounded-xl bg-red-50 px-4 py-2.5 text-[13px] text-red-600">
-          {error}
-        </p>
-      )}
+      {error && <p className="mt-3 text-[13px] text-red-500">{error}</p>}
 
       {hits.length > 0 && (
-        <div className="mt-4 border-t border-black/[0.05] pt-4">
-          <p className="mb-2.5 font-mono text-[11px] uppercase tracking-wider text-blue-500">
-            You&apos;ve been here before
+        <div className="mt-4">
+          <p className="mb-2.5 font-mono text-[10.5px] uppercase tracking-[0.15em] text-blue-500">
+            you&apos;ve been here before
           </p>
           <div className="flex flex-col gap-2">
             {hits.slice(0, 3).map((h, i) => (
-              <div
+              <p
                 key={h.id ?? i}
-                className="animate-rise rounded-xl border border-blue-100 bg-blue-50/50 px-4 py-2.5 text-[13.5px] leading-relaxed text-zinc-700"
+                className="animate-rise border-l border-blue-100 pl-3 text-[13px] leading-relaxed text-zinc-500"
               >
                 {h.memory ?? h.chunk}
-              </div>
+              </p>
             ))}
           </div>
         </div>

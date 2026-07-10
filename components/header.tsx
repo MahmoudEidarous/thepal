@@ -14,34 +14,37 @@ export function Header({
   engine: Engine;
 }) {
   return (
-    <header className="sticky top-0 z-40 border-b border-black/[0.05] bg-[#f7f8fa]/80 backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-3 px-4 sm:px-6">
-        <div className="flex items-baseline gap-1 text-[19px] font-semibold tracking-tight">
+    <header className="sticky top-0 z-40 border-b border-black/[0.04] bg-[#f7f8fa]/75 backdrop-blur-xl">
+      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-4 px-5 sm:px-8">
+        <div className="flex items-baseline gap-1 text-[17px] font-semibold tracking-tight text-zinc-900">
           recall
-          <span className="inline-block size-[7px] rounded-full bg-blue-500" />
+          <span className="inline-block size-[6px] rounded-full bg-blue-500" />
         </div>
 
-        <nav className="flex items-center gap-1.5">
+        <nav className="flex items-center gap-6 sm:gap-8">
           {SPACES.map((s) => (
             <button
               key={s}
               onClick={() => onSpaceChange(s)}
               className={
-                "pill capitalize " +
+                "relative py-1 text-[13px] capitalize transition-colors " +
                 (s === space
-                  ? "bg-zinc-900 text-white"
-                  : "border border-black/[0.08] bg-white text-zinc-600 hover:border-black/[0.16] hover:text-zinc-900")
+                  ? "font-medium text-zinc-900"
+                  : "text-zinc-400 hover:text-zinc-700")
               }
             >
               {s}
+              {s === space && (
+                <span className="absolute -bottom-[3px] left-1/2 size-[3.5px] -translate-x-1/2 rounded-full bg-blue-500" />
+              )}
             </button>
           ))}
         </nav>
 
-        <div className="flex items-center gap-2 rounded-full border border-black/[0.06] bg-white px-3 py-1.5">
+        <div className="flex items-center gap-2">
           <span
             className={
-              "size-[7px] rounded-full " +
+              "size-[6px] rounded-full " +
               (engine === "online"
                 ? "bg-emerald-500"
                 : engine === "offline"
@@ -49,8 +52,8 @@ export function Header({
                   : "bg-zinc-300")
             }
           />
-          <span className="hidden font-mono text-[11px] tracking-wide text-zinc-500 sm:inline">
-            {engine === "online" ? "engine" : engine === "offline" ? "offline" : "…"}
+          <span className="hidden font-mono text-[10.5px] uppercase tracking-[0.15em] text-zinc-400 sm:inline">
+            {engine === "online" ? "local" : engine === "offline" ? "offline" : "…"}
           </span>
         </div>
       </div>

@@ -22,15 +22,14 @@ export type ProcessingDoc = {
   createdAt?: string;
 };
 
-function Badge({ tone, children }: { tone: "blue" | "violet" | "zinc" | "amber"; children: React.ReactNode }) {
+function Tag({ tone, children }: { tone: "blue" | "violet" | "zinc"; children: React.ReactNode }) {
   const tones = {
-    blue: "bg-blue-50 text-blue-600",
-    violet: "bg-violet-50 text-violet-600",
-    zinc: "bg-zinc-100 text-zinc-500",
-    amber: "bg-amber-50 text-amber-600",
+    blue: "text-blue-500",
+    violet: "text-violet-500",
+    zinc: "text-zinc-300",
   };
   return (
-    <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider ${tones[tone]}`}>
+    <span className={`shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] ${tones[tone]}`}>
       {children}
     </span>
   );
@@ -49,42 +48,39 @@ export function MemoryFeed({
 }) {
   if (engine === "offline") {
     return (
-      <section className="card flex flex-col items-center gap-1.5 border-dashed px-6 py-14 text-center shadow-none">
-        <p className="text-[15px] font-medium text-zinc-700">Memory engine is offline</p>
-        <p className="text-[13.5px] text-zinc-400">
-          Start it with <span className="font-mono text-zinc-500">supermemory-server</span> and
-          Recall will reconnect on its own.
+      <div className="py-16 text-center">
+        <p className="text-[15px] font-medium text-zinc-600">Memory engine is offline</p>
+        <p className="mt-1 text-[13.5px] text-zinc-400">
+          Start it with <span className="font-mono text-zinc-500">supermemory-server</span> — Recall
+          reconnects on its own.
         </p>
-      </section>
+      </div>
     );
   }
 
   return (
-    <section className="flex flex-col gap-3">
+    <div className="flex flex-col">
       {processing.map((d) => (
-        <div
-          key={d.id}
-          className="card animate-rise flex items-center gap-3 border-amber-100 bg-amber-50/40 px-5 py-3.5"
-        >
-          <span className="size-[7px] animate-pulse rounded-full bg-amber-400" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[13.5px] text-zinc-600">
-              {(d.title ?? d.content ?? "").slice(0, 90)}
-            </p>
-          </div>
-          <span className="shrink-0 font-mono text-[11px] uppercase tracking-wider text-amber-600">
-            {d.status}…
+        <div key={d.id} className="animate-rise flex items-center gap-3 border-b border-black/[0.04] py-4">
+          <span className="size-[6px] shrink-0 animate-pulse rounded-full bg-amber-400" />
+          <p className="min-w-0 flex-1 truncate text-[14px] italic text-zinc-400">
+            {(d.title ?? d.content ?? "").slice(0, 90)}
+          </p>
+          <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-500">
+            {d.status}
           </span>
         </div>
       ))}
 
       {failed.map((d) => (
-        <div key={d.id} className="card flex items-center gap-3 border-red-100 px-5 py-3 shadow-none">
-          <span className="size-[7px] rounded-full bg-red-400" />
-          <p className="truncate text-[13px] text-zinc-500">
+        <div key={d.id} className="flex items-center gap-3 border-b border-black/[0.04] py-4">
+          <span className="size-[6px] shrink-0 rounded-full bg-red-400" />
+          <p className="min-w-0 flex-1 truncate text-[13.5px] text-zinc-400">
             {(d.title ?? d.content ?? "").slice(0, 70)}
           </p>
-          <span className="ml-auto shrink-0 font-mono text-[11px] text-red-400">failed</span>
+          <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-red-400">
+            failed
+          </span>
           <button
             onClick={() =>
               void fetch("/api/document", {
@@ -94,7 +90,7 @@ export function MemoryFeed({
               })
             }
             aria-label="Dismiss"
-            className="shrink-0 rounded-full px-1.5 text-[13px] leading-none text-zinc-300 hover:text-zinc-600"
+            className="shrink-0 px-1 text-[13px] leading-none text-zinc-300 transition-colors hover:text-zinc-600"
           >
             ✕
           </button>
@@ -102,10 +98,10 @@ export function MemoryFeed({
       ))}
 
       {entries.length === 0 && processing.length === 0 && (
-        <div className="card flex flex-col items-center gap-1.5 border-dashed px-6 py-14 text-center shadow-none">
-          <p className="text-[15px] font-medium text-zinc-700">Nothing remembered yet</p>
-          <p className="text-[13.5px] text-zinc-400">
-            Write something above — watch it become memories in seconds.
+        <div className="py-16 text-center">
+          <p className="text-[15px] font-medium text-zinc-600">Nothing remembered yet</p>
+          <p className="mt-1 text-[13.5px] text-zinc-400">
+            Say something to the orb — watch it become memory.
           </p>
         </div>
       )}
@@ -113,41 +109,36 @@ export function MemoryFeed({
       {entries.map((e) => {
         const superseded = e.history.length > 0;
         return (
-          <article key={e.id} className="card animate-rise px-5 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-1.5">
-                {superseded && <Badge tone="blue">updated · v{e.version}</Badge>}
-                {e.isStatic && <Badge tone="zinc">stable</Badge>}
-                {e.isInference && <Badge tone="violet">inferred</Badge>}
-                {!superseded && !e.isStatic && !e.isInference && <Badge tone="zinc">memory</Badge>}
-              </div>
-              <span className="shrink-0 font-mono text-[11px] text-zinc-300">
-                {timeAgo(e.updatedAt)}
-              </span>
-            </div>
-
-            <p className="mt-2 text-[15px] leading-relaxed text-zinc-900">{e.memory}</p>
-
-            {superseded && (
-              <div className="mt-3 flex flex-col gap-1.5 border-l-2 border-zinc-100 pl-3.5">
-                {e.history
-                  .slice()
-                  .sort((a, b) => b.version - a.version)
-                  .map((h) => (
-                    <div key={h.id} className="flex items-baseline gap-2">
-                      <span className="shrink-0 font-mono text-[10px] text-zinc-300">
-                        v{h.version}
-                      </span>
-                      <p className="text-[13px] leading-relaxed text-zinc-400 line-through decoration-zinc-300">
+          <article key={e.id} className="animate-rise group flex gap-5 border-b border-black/[0.04] py-4">
+            <time className="w-14 shrink-0 pt-[3px] text-right font-mono text-[10.5px] text-zinc-300">
+              {timeAgo(e.updatedAt)}
+            </time>
+            <div className="min-w-0 flex-1">
+              <p className="text-[15px] leading-relaxed text-zinc-800">{e.memory}</p>
+              {superseded && (
+                <div className="mt-2 flex flex-col gap-1">
+                  {e.history
+                    .slice()
+                    .sort((a, b) => b.version - a.version)
+                    .map((h) => (
+                      <p
+                        key={h.id}
+                        className="text-[13px] leading-relaxed text-zinc-300 line-through decoration-zinc-200"
+                      >
                         {h.memory}
                       </p>
-                    </div>
-                  ))}
-              </div>
-            )}
+                    ))}
+                </div>
+              )}
+            </div>
+            <div className="flex shrink-0 items-start gap-2 pt-[3px]">
+              {superseded && <Tag tone="blue">v{e.version}</Tag>}
+              {e.isInference && <Tag tone="violet">inferred</Tag>}
+              {e.isStatic && <Tag tone="zinc">stable</Tag>}
+            </div>
           </article>
         );
       })}
-    </section>
+    </div>
   );
 }

@@ -45,39 +45,40 @@ export function ProfileCard({
   const empty = stat.length === 0 && dyn.length === 0;
 
   return (
-    <section className="card p-5">
-      <h2 className="text-[15px] font-semibold tracking-tight">
-        What Recall knows <span className="font-normal text-zinc-400">about you</span>
+    <section>
+      <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400">
+        what recall knows
       </h2>
 
       {empty ? (
-        <p className="mt-3 text-[13.5px] leading-relaxed text-zinc-400">
-          Nothing yet — it&apos;s still getting to know you. Every capture teaches it.
+        <p className="mt-4 text-[13.5px] leading-relaxed text-zinc-400">
+          Nothing yet — it&apos;s still getting to know you. Every conversation teaches it.
         </p>
       ) : (
-        <div className="mt-4 flex flex-col gap-4">
+        <div className="mt-5 flex flex-col gap-6">
           {stat.length > 0 && (
-            <div>
-              <p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-zinc-400">
-                Stable facts
-              </p>
-              <ul className="flex flex-col gap-1.5">
-                {stat.slice(0, 6).map((f, i) => (
-                  <li key={i} className="text-[13.5px] leading-relaxed text-zinc-700">
-                    {f}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <ul className="flex flex-col gap-2.5">
+              {stat.slice(0, 6).map((f, i) => (
+                <li
+                  key={i}
+                  className="border-l border-zinc-200 pl-3 text-[13.5px] leading-relaxed text-zinc-600"
+                >
+                  {f}
+                </li>
+              ))}
+            </ul>
           )}
           {dyn.length > 0 && (
             <div>
-              <p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-blue-500">
-                Right now
+              <p className="mb-2.5 font-mono text-[10.5px] uppercase tracking-[0.15em] text-blue-500">
+                right now
               </p>
-              <ul className="flex flex-col gap-1.5">
+              <ul className="flex flex-col gap-2.5">
                 {dyn.slice(0, 5).map((f, i) => (
-                  <li key={i} className="text-[13.5px] leading-relaxed text-zinc-700">
+                  <li
+                    key={i}
+                    className="border-l border-blue-100 pl-3 text-[13.5px] leading-relaxed text-zinc-600"
+                  >
                     {f}
                   </li>
                 ))}
