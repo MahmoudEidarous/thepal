@@ -18,8 +18,8 @@ const STATES: Record<OrbState, Params> = {
     energy: 0.045,
     speed: 0.28,
     scale: 0.9,
-    colors: ["148,163,184", "129,140,168", "100,116,139"],
-    alpha: 0.4,
+    colors: ["168,182,212", "142,152,190", "112,126,164"],
+    alpha: 0.5,
     levelGain: 0,
   },
   connecting: {
@@ -183,7 +183,7 @@ export function VoiceOrb({
         c - R * 0.45,
         R * 0.9,
       );
-      hl.addColorStop(0, `rgba(255,255,255,${0.28 + level * 0.15})`);
+      hl.addColorStop(0, `rgba(255,255,255,${0.2 + level * 0.15})`);
       hl.addColorStop(1, "rgba(255,255,255,0)");
       ctx.fillStyle = hl;
       ctx.beginPath();

@@ -1,71 +1,38 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Header } from "@/components/header";
+import { useCallback, useEffect, useState } from "react";
 import { VoicePanel } from "@/components/voice-panel";
-import { CaptureCard } from "@/components/capture-card";
-import { MemoryFeed, type MemoryEntry, type ProcessingDoc } from "@/components/memory-feed";
-import { ProfileCard } from "@/components/profile-card";
-import { DreamPanel } from "@/components/dream-panel";
-import type { Space } from "@/lib/spaces";
+import { Constellation, type MemoryEntry, type ProcessingDoc } from "@/components/constellation";
+import { DreamPopover } from "@/components/dream-popover";
+import { timeAgo } from "@/lib/format";
 
 type Engine = "online" | "offline" | "checking";
-type Toast = { id: string; text: string };
 
 export default function Home() {
-  const [space, setSpace] = useState<Space>("personal");
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [processing, setProcessing] = useState<ProcessingDoc[]>([]);
-  const [failed, setFailed] = useState<ProcessingDoc[]>([]);
   const [engine, setEngine] = useState<Engine>("checking");
-  const [toasts, setToasts] = useState<Toast[]>([]);
-
-  const spaceRef = useRef(space);
-  const knownIds = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    spaceRef.current = space;
-  }, [space]);
+  const [selected, setSelected] = useState<MemoryEntry | null>(null);
+  const [name, setName] = useState<string | undefined>(undefined);
 
   const refresh = useCallback(async () => {
-    const s = space;
     try {
-      const res = await fetch(`/api/feed?space=${s}`);
-      if (s !== spaceRef.current) return; // stale response from a previous space
+      const res = await fetch("/api/feed");
       if (res.status === 503) {
         setEngine("offline");
         return;
       }
       if (!res.ok) return;
       const data = await res.json();
-      if (s !== spaceRef.current) return;
-      const fresh: MemoryEntry[] = data.entries ?? [];
-
-      // New memories surface as quiet notifications on the stage —
-      // the proof that talking becomes memory, without leaving the orb.
-      if (knownIds.current) {
-        const news = fresh.filter((e) => !knownIds.current!.has(e.id)).slice(0, 3);
-        news.forEach((e) => {
-          const toast = { id: e.id, text: e.memory };
-          setToasts((t) => [...t.filter((x) => x.id !== e.id), toast].slice(-3));
-          setTimeout(() => setToasts((t) => t.filter((x) => x.id !== e.id)), 7000);
-        });
-      }
-      knownIds.current = new Set(fresh.map((e) => e.id));
-
-      setEntries(fresh);
+      setEntries(data.entries ?? []);
       setProcessing(data.processing ?? []);
-      setFailed(data.failed ?? []);
       setEngine("online");
     } catch {
-      if (s === spaceRef.current) setEngine("offline");
+      setEngine("offline");
     }
-  }, [space]);
+  }, []);
 
   useEffect(() => {
-    setEntries([]);
-    setProcessing([]);
-    setFailed([]);
-    knownIds.current = null;
     refresh();
     const t = setInterval(() => {
       if (!document.hidden) refresh();
@@ -73,60 +40,105 @@ export default function Home() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  return (
-    <div className="min-h-screen">
-      <Header space={space} onSpaceChange={setSpace} engine={engine} />
+  // First name for the greeting, pulled from the profile itself.
+  useEffect(() => {
+    fetch("/api/profile")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const facts: string[] = d?.profile?.static ?? [];
+        const m = facts.join(" ").match(/name is (\w+)/i);
+        if (m) setName(m[1]);
+      })
+      .catch(() => {});
+  }, []);
 
-      {/* faint atmosphere behind the stage */}
+  return (
+    <div className="relative h-dvh overflow-hidden">
+      {/* atmosphere */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[70vh] bg-[radial-gradient(640px_420px_at_50%_36%,rgb(99_132_255/0.08),transparent_70%)]"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(760px_520px_at_50%_40%,rgb(84_104_255/0.13),transparent_70%)]"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(1400px_1000px_at_50%_50%,transparent_55%,rgb(0_0_0/0.55))]"
       />
 
-      <main>
-        <VoicePanel space={space} onSpaceChange={setSpace} engine={engine} />
+      {/* the sky of memories */}
+      <Constellation
+        entries={entries}
+        processing={processing}
+        selectedId={selected?.id ?? null}
+        onSelect={setSelected}
+      />
 
-        <div className="mx-auto max-w-5xl px-5 pb-32 sm:px-8">
-          <div className="grid gap-14 lg:grid-cols-[1fr_300px]">
-            <section className="min-w-0">
-              <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400">
-                live memory · {space}
-              </h2>
-              <div className="mt-2">
-                <MemoryFeed
-                  entries={entries}
-                  processing={processing}
-                  failed={failed}
-                  engine={engine}
-                />
-              </div>
-            </section>
-
-            <aside className="flex flex-col gap-12">
-              <ProfileCard space={space} engine={engine} />
-              <DreamPanel />
-              <CaptureCard space={space} onCaptured={refresh} />
-            </aside>
-          </div>
+      {/* chrome */}
+      <header className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-6 py-5">
+        <div className="flex items-baseline gap-1 text-[16px] font-semibold tracking-tight text-white">
+          recall
+          <span className="inline-block size-[5px] rounded-full bg-blue-400" />
         </div>
-      </main>
-
-      {/* memory toasts — new memories land here while you talk */}
-      <div className="pointer-events-none fixed bottom-6 left-1/2 z-40 flex w-full max-w-md -translate-x-1/2 flex-col items-center gap-2 px-4">
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className="animate-rise w-fit max-w-full rounded-full border border-black/[0.05] bg-white/85 px-4 py-2 shadow-[0_8px_30px_-8px_rgb(0_0_0/0.12)] backdrop-blur-md"
-          >
-            <p className="truncate text-[13px] text-zinc-600">
-              <span className="mr-2 font-mono text-[10px] uppercase tracking-[0.12em] text-blue-500">
-                remembered
-              </span>
-              {t.text}
-            </p>
+        <div className="flex items-center gap-3">
+          <div className="glass-chip flex items-center gap-2 rounded-full px-3.5 py-2">
+            <span
+              className={
+                "size-[6px] rounded-full " +
+                (engine === "online"
+                  ? "bg-emerald-400 shadow-[0_0_8px_1px_rgb(52_211_153/0.6)]"
+                  : engine === "offline"
+                    ? "bg-red-400"
+                    : "bg-zinc-500")
+              }
+            />
+            <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-400">
+              {engine === "online" ? "local" : engine === "offline" ? "offline" : "…"}
+            </span>
           </div>
-        ))}
-      </div>
+          <DreamPopover />
+        </div>
+      </header>
+
+      {/* the voice — the main event */}
+      <VoicePanel engine={engine} greetingName={name} />
+
+      {/* memory detail — click a star */}
+      {selected && (
+        <aside className="glass animate-rise absolute bottom-6 left-6 z-40 w-[min(88vw,360px)] rounded-3xl p-6">
+          <div className="flex items-start justify-between gap-3">
+            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-zinc-500">
+              {selected.isInference ? "inferred" : selected.isStatic ? "stable" : "memory"}
+              {selected.version > 1 ? ` · v${selected.version}` : ""} ·{" "}
+              {timeAgo(selected.updatedAt)}
+            </p>
+            <button
+              onClick={() => setSelected(null)}
+              aria-label="Close"
+              className="-mr-1 -mt-1 px-1 text-[13px] leading-none text-zinc-500 transition-colors hover:text-zinc-200"
+            >
+              ✕
+            </button>
+          </div>
+          <p className="mt-3 text-[14.5px] leading-relaxed text-zinc-100">{selected.memory}</p>
+          {selected.history.length > 0 && (
+            <div className="mt-4 flex flex-col gap-2 border-t border-white/[0.06] pt-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-600">
+                how it evolved
+              </p>
+              {selected.history
+                .slice()
+                .sort((a, b) => b.version - a.version)
+                .map((h) => (
+                  <p
+                    key={h.id}
+                    className="text-[13px] leading-relaxed text-zinc-500 line-through decoration-zinc-600"
+                  >
+                    {h.memory}
+                  </p>
+                ))}
+            </div>
+          )}
+        </aside>
+      )}
     </div>
   );
 }

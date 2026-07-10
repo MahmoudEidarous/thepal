@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
-import type { Space } from "@/lib/spaces";
 import { VoiceOrb, type OrbState } from "./voice-orb";
 
 type Line = { role: "user" | "agent"; text: string };
@@ -26,24 +25,39 @@ async function postJson(path: string, body: unknown) {
   return data;
 }
 
+function MicIcon({ off }: { off?: boolean }) {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+      <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+      <line x1="12" x2="12" y1="18" y2="21.5" />
+      {off && <line x1="3.5" x2="20.5" y1="3.5" y2="20.5" stroke="currentColor" />}
+    </svg>
+  );
+}
+
+function EndIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+      <line x1="5" y1="5" x2="19" y2="19" />
+      <line x1="19" y1="5" x2="5" y2="19" />
+    </svg>
+  );
+}
+
 function VoiceCore({
-  space,
-  onSpaceChange,
   engine,
+  greetingName,
 }: {
-  space: Space;
-  onSpaceChange: (s: Space) => void;
   engine: Engine;
+  greetingName?: string;
 }) {
-  const spaceRef = useRef(space);
   const [lines, setLines] = useState<Line[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
   const [pending, setPending] = useState<PendingForget | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState("");
-  const [greeting, setGreeting] = useState("Hello.");
   const seq = useRef(0);
-  const spaceSetByTool = useRef(false);
   const isSpeakingRef = useRef(false);
 
   const conversation = useConversation({
@@ -54,29 +68,6 @@ function VoiceCore({
   const { status, isSpeaking } = conversation;
   const connected = status === "connected";
   isSpeakingRef.current = isSpeaking;
-
-  useEffect(() => {
-    const h = new Date().getHours();
-    setGreeting(h < 5 ? "Still up?" : h < 12 ? "Good morning." : h < 18 ? "Good afternoon." : "Good evening.");
-  }, []);
-
-  useEffect(() => {
-    spaceRef.current = space;
-  }, [space]);
-
-  // Tell the live agent when the user changes space by hand.
-  useEffect(() => {
-    if (spaceSetByTool.current) {
-      spaceSetByTool.current = false;
-      return;
-    }
-    if (connected) {
-      conversation.sendContextualUpdate(
-        `The user switched the app to the ${space} space. Memory tools now act on ${space}.`,
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [space]);
 
   const getLevel = useCallback(() => {
     try {
@@ -122,18 +113,13 @@ function VoiceCore({
         // debugging and as a quiet-environment fallback.
         textOnly: new URLSearchParams(window.location.search).has("text"),
         dynamicVariables: {
-          space: spaceRef.current,
           today: new Date().toISOString().slice(0, 10),
           weekday: new Date().toLocaleDateString("en-US", { weekday: "long" }),
         },
         clientTools: {
           search_memories: ({ query }: { query: string }) =>
             track("searching memories", async () => {
-              const data = await postJson("/api/recall", {
-                q: query,
-                space: spaceRef.current,
-                limit: 6,
-              });
+              const data = await postJson("/api/recall", { q: query, limit: 6 });
               const hits = (data.results ?? [])
                 .map((r: { memory?: string; chunk?: string }) => r.memory ?? r.chunk)
                 .filter(Boolean);
@@ -143,7 +129,7 @@ function VoiceCore({
             }),
           get_profile: () =>
             track("reading profile", async () => {
-              const res = await fetch(`/api/profile?space=${spaceRef.current}`);
+              const res = await fetch("/api/profile");
               const data = await res.json();
               const stat = data.profile?.static ?? [];
               const dyn = data.profile?.dynamic ?? [];
@@ -156,57 +142,35 @@ function VoiceCore({
                 content,
                 kind: kind ?? "memory",
                 due,
-                space: spaceRef.current,
                 source: "recall-voice",
               });
-              return "Saved. It will appear in the feed once extracted.";
+              return "Saved. The user can watch it join their constellation.";
             }),
           preview_forget: ({ about }: { about: string }) =>
             track("previewing forget", async () => {
-              const data = await postJson("/api/forget", {
-                query: about,
-                space: spaceRef.current,
-                dryRun: true,
-              });
+              const data = await postJson("/api/forget", { query: about, dryRun: true });
               return data.count
                 ? `${data.count} memories would be deleted:\n${data.memories.map((m: string) => `- ${m}`).join("\n")}`
                 : "Nothing matches that.";
             }),
           execute_forget: ({ about }: { about: string }) =>
             track("awaiting approval", async () => {
-              const preview = await postJson("/api/forget", {
-                query: about,
-                space: spaceRef.current,
-                dryRun: true,
-              });
+              const preview = await postJson("/api/forget", { query: about, dryRun: true });
               if (!preview.count) return "Nothing matches that — nothing to delete.";
               const approved = await new Promise<boolean>((resolve) =>
                 setPending({ about, preview: preview.memories ?? [], resolve }),
               );
               setPending(null);
               if (!approved) return "The user denied the deletion on screen. Nothing was deleted.";
-              const res = await postJson("/api/forget", {
-                query: about,
-                space: spaceRef.current,
-                dryRun: false,
-              });
+              const res = await postJson("/api/forget", { query: about, dryRun: false });
               return `Deleted ${res.count} memories. They are gone.`;
             }),
           get_briefing: () =>
             track("fetching briefing", async () => {
-              const res = await fetch("/api/briefings?space=personal");
+              const res = await fetch("/api/briefings");
               const data = await res.json();
               const latest = data.briefings?.[0];
               return latest?.content ?? "No briefing yet — I haven't dreamed since we last spoke.";
-            }),
-          switch_space: ({ space: target }: { space: string }) =>
-            track(`switching to ${target}`, async () => {
-              if (target !== "personal" && target !== "work" && target !== "health") {
-                return "Unknown space. The spaces are personal, work, and health.";
-              }
-              spaceSetByTool.current = true;
-              onSpaceChange(target);
-              return `Switched to the ${target} space.`;
             }),
         },
       });
@@ -237,76 +201,88 @@ function VoiceCore({
 
   const lastAgent = [...lines].reverse().find((l) => l.role === "agent");
   const lastUser = [...lines].reverse().find((l) => l.role === "user");
+  const h = new Date().getHours();
+  const greeting = h < 5 ? "Still up" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 
   return (
-    <section className="relative flex min-h-[calc(100dvh-11rem)] flex-col items-center justify-center py-10 text-center">
-      <VoiceOrb state={orbState} getLevel={getLevel} onClick={wake} />
-
-      <p className="mt-2 h-4 font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400">
-        {orbState === "idle"
-          ? ""
-          : orbState === "connecting"
-            ? "waking"
-            : activity.length > 0
-              ? activity[activity.length - 1].label
-              : orbState}
-      </p>
-
-      {!connected && (
-        <div className="mt-6 max-w-xl">
-          <h1 className="text-[clamp(28px,4.5vw,40px)] font-semibold leading-[1.1] tracking-[-0.02em] text-zinc-900">
-            {greeting}
-            <span className="text-zinc-400"> Just talk.</span>
-          </h1>
-          <p className="mx-auto mt-4 max-w-md text-[15px] leading-relaxed text-zinc-500">
-            Recall listens, remembers what matters, and forgets only with your
-            approval. Every memory stays on this machine.
-          </p>
-          <button
-            onClick={wake}
-            className="mt-8 rounded-full bg-zinc-900 px-7 py-3 text-[14px] font-medium text-white transition-all hover:bg-zinc-700 hover:shadow-[0_8px_30px_-8px_rgb(37_99_235/0.5)]"
-          >
-            Start talking
-          </button>
+    <>
+      {/* the orb — dead center of everything */}
+      <div className="pointer-events-none absolute left-1/2 top-[42%] z-10 -translate-x-1/2 -translate-y-1/2">
+        <div className="pointer-events-auto">
+          <VoiceOrb state={orbState} getLevel={getLevel} onClick={wake} size={300} />
         </div>
-      )}
+      </div>
 
-      {connected && (
-        <div className="mt-6 flex min-h-[96px] w-full max-w-xl flex-col items-center gap-3 px-4">
-          {lastUser && (
-            <p className="text-[13px] leading-relaxed text-zinc-400">{lastUser.text}</p>
-          )}
-          {lastAgent && (
-            <p className="animate-rise text-[18px] leading-relaxed tracking-[-0.01em] text-zinc-800">
-              {lastAgent.text}
-            </p>
-          )}
-        </div>
-      )}
-
-      {error && (
-        <p className="mt-5 text-[13px] text-red-500">{error}</p>
-      )}
-      {engine === "offline" && (
-        <p className="mt-5 text-[13px] text-amber-600">
-          The memory engine is offline — the voice can talk but can&apos;t reach your memories.
+      {/* status + captions live in a fixed band under the orb */}
+      <div className="pointer-events-none absolute inset-x-0 top-[62%] z-20 flex flex-col items-center gap-3 px-6 text-center">
+        <p className="h-4 font-mono text-[10px] uppercase tracking-[0.28em] text-zinc-500">
+          {orbState === "idle"
+            ? ""
+            : orbState === "connecting"
+              ? "waking"
+              : activity.length > 0
+                ? activity[activity.length - 1].label
+                : orbState}
         </p>
-      )}
 
+        {!connected && status !== "connecting" && (
+          <div className="pointer-events-auto max-w-lg">
+            <h1 className="text-[clamp(26px,3.6vw,36px)] font-semibold leading-[1.15] tracking-[-0.02em] text-white">
+              {greeting}
+              {greetingName ? `, ${greetingName}` : ""}.
+              <br />
+              <span className="text-zinc-500">Just talk.</span>
+            </h1>
+            <p className="mx-auto mt-3 max-w-sm text-[13.5px] leading-relaxed text-zinc-500">
+              Your memories orbit above — every one of them lives on this machine.
+            </p>
+            <button
+              onClick={wake}
+              className="mt-7 rounded-full bg-white px-7 py-3 text-[13.5px] font-semibold text-zinc-950 shadow-[0_0_0_1px_rgb(255_255_255/0.1),0_16px_50px_-12px_rgb(120_140_255/0.45)] transition-all hover:scale-[1.03] hover:shadow-[0_0_0_1px_rgb(255_255_255/0.2),0_20px_60px_-12px_rgb(120_140_255/0.6)] active:scale-[0.99]"
+            >
+              Start talking
+            </button>
+          </div>
+        )}
+
+        {connected && (
+          <div className="flex max-w-xl flex-col items-center gap-2.5">
+            {lastUser && (
+              <p className="text-[12.5px] leading-relaxed text-zinc-500">{lastUser.text}</p>
+            )}
+            {lastAgent && (
+              <p className="animate-rise text-[16.5px] leading-relaxed tracking-[-0.01em] text-zinc-100 [text-shadow:0_2px_24px_rgb(9_9_12/0.9)]">
+                {lastAgent.text}
+              </p>
+            )}
+          </div>
+        )}
+
+        {error && <p className="text-[12.5px] text-red-400">{error}</p>}
+        {engine === "offline" && (
+          <p className="text-[12.5px] text-amber-400/90">
+            memory engine offline — the voice can talk but can&apos;t reach your memories
+          </p>
+        )}
+      </div>
+
+      {/* liquid-glass controls */}
       {connected && (
-        <div className="mt-8 flex w-full max-w-md items-center justify-center gap-6">
+        <div className="absolute inset-x-0 bottom-8 z-30 flex items-center justify-center gap-3.5">
           <button
             onClick={() => conversation.setMuted(!conversation.isMuted)}
+            aria-label={conversation.isMuted ? "Unmute microphone" : "Mute microphone"}
             className={
-              "text-[13px] font-medium transition-colors " +
+              "glass-chip flex size-12 items-center justify-center rounded-full transition-all hover:scale-105 " +
               (conversation.isMuted
-                ? "text-red-500 hover:text-red-600"
-                : "text-zinc-400 hover:text-zinc-700")
+                ? "text-amber-300 hover:border-amber-300/40"
+                : "text-zinc-300 hover:border-white/25 hover:text-white")
             }
           >
-            {conversation.isMuted ? "unmute" : "mute"}
+            <MicIcon off={conversation.isMuted} />
           </button>
-          <form onSubmit={sendTyped} className="min-w-0 flex-1">
+
+          <form onSubmit={sendTyped}>
             <input
               value={text}
               onChange={(e) => {
@@ -314,29 +290,32 @@ function VoiceCore({
                 conversation.sendUserActivity();
               }}
               placeholder="or type it"
-              className="w-full border-b border-black/[0.08] bg-transparent pb-1 text-center text-[14px] text-zinc-800 outline-none transition-colors placeholder:text-zinc-300 focus:border-black/[0.25]"
+              className="glass-chip h-12 w-60 rounded-full px-5 text-center text-[13.5px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25 sm:w-72"
             />
           </form>
+
           <button
             onClick={() => void conversation.endSession()}
-            className="text-[13px] font-medium text-zinc-400 transition-colors hover:text-zinc-700"
+            aria-label="End the conversation"
+            className="glass-chip flex size-12 items-center justify-center rounded-full text-zinc-300 transition-all hover:scale-105 hover:border-red-400/50 hover:bg-red-500/10 hover:text-red-300"
           >
-            end
+            <EndIcon />
           </button>
         </div>
       )}
 
+      {/* approval sheet — the agent is frozen until you decide */}
       {pending && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 p-6 backdrop-blur-md">
-          <div className="animate-rise w-full max-w-md rounded-2xl border border-black/[0.06] bg-white p-7 text-left shadow-[0_24px_80px_-24px_rgb(0_0_0/0.25)]">
-            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-red-500">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-md">
+          <div className="glass animate-rise w-full max-w-md rounded-3xl p-7 text-left">
+            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-red-400">
               approval required
             </p>
-            <p className="mt-2 text-[17px] font-semibold tracking-tight text-zinc-900">
+            <p className="mt-3 text-[17px] font-semibold tracking-tight text-white">
               Forget {pending.preview.length}{" "}
               {pending.preview.length === 1 ? "memory" : "memories"}?
             </p>
-            <p className="mt-1 text-[13.5px] leading-relaxed text-zinc-500">
+            <p className="mt-1.5 text-[13px] leading-relaxed text-zinc-400">
               Recall wants to permanently delete everything about “{pending.about}”. This cannot
               be undone.
             </p>
@@ -344,22 +323,22 @@ function VoiceCore({
               {pending.preview.map((m, i) => (
                 <p
                   key={i}
-                  className="border-l-2 border-red-200 pl-3 text-[13.5px] leading-relaxed text-zinc-500 line-through decoration-red-300/70"
+                  className="border-l-2 border-red-400/30 pl-3 text-[13px] leading-relaxed text-zinc-500 line-through decoration-red-400/50"
                 >
                   {m}
                 </p>
               ))}
             </div>
-            <div className="mt-6 flex gap-3">
+            <div className="mt-7 flex gap-3">
               <button
                 onClick={() => pending.resolve(true)}
-                className="rounded-full bg-red-600 px-6 py-2.5 text-[13.5px] font-medium text-white transition-opacity hover:opacity-85"
+                className="rounded-full bg-red-500 px-6 py-2.5 text-[13px] font-semibold text-white transition-all hover:bg-red-400"
               >
                 Forget them
               </button>
               <button
                 onClick={() => pending.resolve(false)}
-                className="rounded-full border border-black/[0.1] bg-white px-6 py-2.5 text-[13.5px] font-medium text-zinc-700 transition-colors hover:border-black/[0.25]"
+                className="glass-chip rounded-full px-6 py-2.5 text-[13px] font-medium text-zinc-200 transition-all hover:border-white/25"
               >
                 Keep
               </button>
@@ -367,15 +346,11 @@ function VoiceCore({
           </div>
         </div>
       )}
-    </section>
+    </>
   );
 }
 
-export function VoicePanel(props: {
-  space: Space;
-  onSpaceChange: (s: Space) => void;
-  engine: Engine;
-}) {
+export function VoicePanel(props: { engine: Engine; greetingName?: string }) {
   return (
     <ConversationProvider>
       <VoiceCore {...props} />
