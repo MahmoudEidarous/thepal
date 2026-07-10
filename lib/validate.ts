@@ -1,4 +1,4 @@
-import { SPACES, type Space } from "./supermemory";
+import { SPACES, type Space } from "./spaces";
 
 export function asSpace(value: unknown): Space {
   return SPACES.includes(value as Space) ? (value as Space) : "personal";

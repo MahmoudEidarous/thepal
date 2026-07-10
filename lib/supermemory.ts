@@ -6,11 +6,5 @@ export const supermemory = new Supermemory({
   baseURL: process.env.SUPERMEMORY_BASE_URL ?? "http://localhost:6767",
 });
 
-// Every write and search must carry a containerTag or all data
-// collapses into one bucket. Spaces are our containerTags.
-export const SPACES = ["personal", "work", "health"] as const;
-export type Space = (typeof SPACES)[number];
-
-export function spaceTag(space: Space): string {
-  return `recall_${space}`;
-}
+export { SPACES, spaceTag } from "./spaces";
+export type { Space } from "./spaces";
