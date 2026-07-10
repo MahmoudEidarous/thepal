@@ -15,7 +15,7 @@ export function Header({
 }) {
   return (
     <header className="sticky top-0 z-40 border-b border-black/[0.05] bg-[#f7f8fa]/80 backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
+      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-3 px-4 sm:px-6">
         <div className="flex items-baseline gap-1 text-[19px] font-semibold tracking-tight">
           recall
           <span className="inline-block size-[7px] rounded-full bg-blue-500" />
@@ -49,7 +49,7 @@ export function Header({
                   : "bg-zinc-300")
             }
           />
-          <span className="font-mono text-[11px] tracking-wide text-zinc-500">
+          <span className="hidden font-mono text-[11px] tracking-wide text-zinc-500 sm:inline">
             {engine === "online" ? "engine" : engine === "offline" ? "offline" : "…"}
           </span>
         </div>

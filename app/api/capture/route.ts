@@ -3,7 +3,7 @@ import { apiError, asSpace } from "@/lib/validate";
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const content = typeof body.content === "string" ? body.content.trim() : "";
     if (!content) {
       return Response.json({ error: "content required" }, { status: 400 });

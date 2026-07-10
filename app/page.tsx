@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Header } from "@/components/header";
 import { CaptureCard } from "@/components/capture-card";
 import { MemoryFeed, type MemoryEntry, type ProcessingDoc } from "@/components/memory-feed";
@@ -32,21 +32,29 @@ export default function Home() {
     setGreeting(h < 5 ? "Still up?" : h < 12 ? "Good morning." : h < 18 ? "Good afternoon." : "Good evening.");
   }, []);
 
+  const spaceRef = useRef(space);
+  useEffect(() => {
+    spaceRef.current = space;
+  }, [space]);
+
   const refresh = useCallback(async () => {
+    const s = space;
     try {
-      const res = await fetch(`/api/feed?space=${space}`);
+      const res = await fetch(`/api/feed?space=${s}`);
+      if (s !== spaceRef.current) return; // stale response from a previous space
       if (res.status === 503) {
         setEngine("offline");
         return;
       }
       if (!res.ok) return;
       const data = await res.json();
+      if (s !== spaceRef.current) return;
       setEntries(data.entries ?? []);
       setProcessing(data.processing ?? []);
       setFailed(data.failed ?? []);
       setEngine("online");
     } catch {
-      setEngine("offline");
+      if (s === spaceRef.current) setEngine("offline");
     }
   }, [space]);
 
@@ -55,7 +63,9 @@ export default function Home() {
     setProcessing([]);
     setFailed([]);
     refresh();
-    const t = setInterval(refresh, 3_000);
+    const t = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 3_000);
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -70,7 +80,7 @@ export default function Home() {
     <div className="min-h-screen">
       <Header space={space} onSpaceChange={setSpace} engine={engine} />
 
-      <main className="mx-auto grid max-w-5xl gap-6 px-6 pb-24 pt-12 lg:grid-cols-[1fr_340px]">
+      <main className="mx-auto grid max-w-5xl gap-6 px-4 pb-24 pt-12 sm:px-6 lg:grid-cols-[1fr_340px]">
         <div className="flex min-w-0 flex-col gap-6">
           <div className="flex flex-col gap-5">
             <h1 className="text-[34px] font-semibold leading-tight tracking-tight">
@@ -102,7 +112,7 @@ export default function Home() {
             </>
           )}
           {view === "ask" && <ChatPanel key={space} space={space} />}
-          {view === "dream" && <DreamPanel space={space} />}
+          {view === "dream" && <DreamPanel />}
         </div>
 
         <aside className="flex flex-col gap-6 lg:pt-[76px]">

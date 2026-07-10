@@ -14,6 +14,11 @@ export function ProfileCard({
 }) {
   const [profile, setProfile] = useState<Profile>({});
 
+  // Don't show the previous space's facts while the new one loads.
+  useEffect(() => {
+    setProfile({});
+  }, [space]);
+
   useEffect(() => {
     if (engine !== "online") return;
     let alive = true;

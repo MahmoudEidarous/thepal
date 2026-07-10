@@ -31,7 +31,7 @@ export async function GET(request: Request) {
 
     const entries = (entriesRes.memoryEntries ?? [])
       .filter((e) => e.isLatest && !e.isForgotten)
-      .sort((a, b) => (b.updatedAt > a.updatedAt ? 1 : -1));
+      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
 
     const docs = (docsRes as { memories?: Array<{ id: string; status?: string | null; title?: string | null; content?: string | null; createdAt?: string }> }).memories ?? [];
     const processing = docs.filter((d) => d.status && !["done", "failed"].includes(d.status));

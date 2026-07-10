@@ -31,12 +31,14 @@ export function CaptureCard({
       setHits([]);
       return;
     }
+    const ctrl = new AbortController();
     debounce.current = setTimeout(async () => {
       try {
         const res = await fetch("/api/recall", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ q, space }),
+          signal: ctrl.signal,
         });
         if (!res.ok) return;
         const data = await res.json();
@@ -47,6 +49,7 @@ export function CaptureCard({
     }, 600);
     return () => {
       if (debounce.current) clearTimeout(debounce.current);
+      ctrl.abort(); // a newer keystroke or space switch owns the answer now
     };
   }, [content, space]);
 
