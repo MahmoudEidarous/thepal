@@ -76,6 +76,38 @@ function VoiceCore({
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
 
+  // what you owe, at a glance — refreshed each minute while idle
+  const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
+    open: 0,
+    next: null,
+  });
+  useEffect(() => {
+    const load = () =>
+      fetch("/api/agenda")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!d) return;
+          const items = d.commitments as Array<{ due: string | null; overdue: boolean; dueToday: boolean }>;
+          const next = items.find((c) => c.due);
+          setAgenda({
+            open: items.length,
+            next: next
+              ? next.overdue
+                ? "overdue"
+                : next.dueToday
+                  ? "due today"
+                  : `due ${new Date(`${next.due}T12:00:00`).toLocaleDateString("en-US", {
+                      weekday: "short",
+                    })}`
+              : null,
+          });
+        })
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
   // the orb scales to the window — never overflows a small screen
   const orbSize = useSyncExternalStore(
     subscribeResize,
@@ -142,9 +174,58 @@ function VoiceCore({
     setError(null);
     setLines([]);
     try {
-      const res = await fetch("/api/voice/signed-url");
+      // agenda + boundaries ride in with the session — the agent knows
+      // what you owe and what it must never suggest, before you speak
+      const [res, agendaData, pinnedData] = await Promise.all([
+        fetch("/api/voice/signed-url"),
+        fetch("/api/agenda")
+          .then((r) => (r.ok ? r.json() : { commitments: [] }))
+          .catch(() => ({ commitments: [] })),
+        fetch("/api/pinned")
+          .then((r) => (r.ok ? r.json() : { pinned: [] }))
+          .catch(() => ({ pinned: [] })),
+      ]);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "couldn't reach ElevenLabs");
+
+      type AgendaItem = { content: string; due: string | null; overdue: boolean; dueToday: boolean };
+      const agendaText = (agendaData.commitments as AgendaItem[]).length
+        ? (agendaData.commitments as AgendaItem[])
+            .map(
+              (c) =>
+                `- ${c.content}${
+                  c.due
+                    ? ` (due ${c.due}${c.overdue ? " — OVERDUE" : c.dueToday ? " — TODAY" : ""})`
+                    : ""
+                }`,
+            )
+            .join("\n")
+        : "none";
+      const boundariesText = (pinnedData.pinned as string[]).length
+        ? (pinnedData.pinned as string[]).map((p) => `- ${p}`).join("\n")
+        : "none";
+
+      // the agent's first words — computed here, from the live ledger
+      const items = agendaData.commitments as AgendaItem[];
+      const urgent = items.find((c) => c.overdue || c.dueToday) ?? items.find((c) => c.due);
+      const namePart = greetingName ? `, ${greetingName}` : "";
+      const dueDay = (d: string) =>
+        new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { weekday: "long" });
+      const opening =
+        memoryCount === 0
+          ? `${greeting}${namePart}. We haven't really met — I'm Recall, your second brain. Tell me a bit about yourself and you'll watch me start remembering.`
+          : urgent
+            ? `${greeting}${namePart}. One thing on the ledger: ${urgent.content.replace(/\.$/, "")}${
+                urgent.overdue
+                  ? " — that's overdue."
+                  : urgent.dueToday
+                    ? " — that's due today."
+                    : urgent.due
+                      ? ` — due ${dueDay(urgent.due)}.`
+                      : "."
+              } What's on your mind?`
+            : `${greeting}${namePart}. Everything you've told me is loaded. What's on your mind?`;
+
       conversation.startSession({
         signedUrl: data.signedUrl,
         connectionType: "websocket",
@@ -152,8 +233,11 @@ function VoiceCore({
         // debugging and as a quiet-environment fallback.
         textOnly: new URLSearchParams(window.location.search).has("text"),
         dynamicVariables: {
-          today: new Date().toISOString().slice(0, 10),
+          today: new Date().toLocaleDateString("en-CA"),
           weekday: new Date().toLocaleDateString("en-US", { weekday: "long" }),
+          agenda: agendaText,
+          boundaries: boundariesText,
+          opening,
         },
         clientTools: {
           search_memories: ({ query }: { query: string }) =>
@@ -203,6 +287,45 @@ function VoiceCore({
               if (!approved) return "The user denied the deletion on screen. Nothing was deleted.";
               const res = await postJson("/api/forget", { query: about, dryRun: false });
               return `Deleted ${res.count} memories. They are gone.`;
+            }),
+          get_agenda: () =>
+            track("checking the ledger", async () => {
+              const res = await fetch("/api/agenda");
+              const data = await res.json();
+              const items = (data.commitments ?? []) as Array<{
+                content: string;
+                due: string | null;
+                overdue: boolean;
+                dueToday: boolean;
+              }>;
+              return items.length
+                ? `${items.length} open commitment${items.length > 1 ? "s" : ""}:\n${items
+                    .map(
+                      (c) =>
+                        `- ${c.content}${
+                          c.due
+                            ? ` (due ${c.due}${c.overdue ? " — OVERDUE" : c.dueToday ? " — TODAY" : ""})`
+                            : ""
+                        }`,
+                    )
+                    .join("\n")}`
+                : "No open commitments. The ledger is clear.";
+            }),
+          complete_commitment: ({ about }: { about: string }) =>
+            track("closing a commitment", async () => {
+              const res = await fetch("/api/agenda/complete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ q: about }),
+              });
+              const data = await res.json();
+              if (!res.ok)
+                return data.open
+                  ? `No open commitment matches that. Still open:\n${data.open
+                      .map((o: string) => `- ${o}`)
+                      .join("\n")}`
+                  : "No open commitments to close.";
+              return `Closed: ${data.completed}. It stays in the ledger as done.`;
             }),
           get_briefing: () =>
             track("fetching briefing", async () => {
@@ -281,6 +404,13 @@ function VoiceCore({
                 ? "tap the orb — tell it something worth keeping"
                 : "tap the orb to talk"}
             </button>
+            {agenda.open > 0 && (
+              <p className="glass-chip animate-rise rounded-full px-3.5 py-1.5 font-mono text-[10px] tracking-[0.14em] text-zinc-400">
+                <span className="mr-2 inline-block size-[5px] rounded-full bg-amber-300/90 align-middle shadow-[0_0_8px_1px_rgb(252_211_77/0.5)]" />
+                {agenda.open} open commitment{agenda.open > 1 ? "s" : ""}
+                {agenda.next ? ` · ${agenda.next}` : ""}
+              </p>
+            )}
           </div>
         )}
 
