@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Header } from "@/components/header";
 import { CaptureCard } from "@/components/capture-card";
-import { MemoryFeed, type MemoryDoc } from "@/components/memory-feed";
+import { MemoryFeed, type MemoryEntry, type ProcessingDoc } from "@/components/memory-feed";
 import { ProfileCard } from "@/components/profile-card";
 import type { Space } from "@/lib/spaces";
 
@@ -11,7 +11,9 @@ type Engine = "online" | "offline" | "checking";
 
 export default function Home() {
   const [space, setSpace] = useState<Space>("personal");
-  const [docs, setDocs] = useState<MemoryDoc[]>([]);
+  const [entries, setEntries] = useState<MemoryEntry[]>([]);
+  const [processing, setProcessing] = useState<ProcessingDoc[]>([]);
+  const [failed, setFailed] = useState<ProcessingDoc[]>([]);
   const [engine, setEngine] = useState<Engine>("checking");
   const [greeting, setGreeting] = useState("Hello.");
 
@@ -22,14 +24,16 @@ export default function Home() {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`/api/memories?space=${space}`);
+      const res = await fetch(`/api/feed?space=${space}`);
       if (res.status === 503) {
         setEngine("offline");
         return;
       }
       if (!res.ok) return;
       const data = await res.json();
-      setDocs(data.memories ?? data.results ?? []);
+      setEntries(data.entries ?? []);
+      setProcessing(data.processing ?? []);
+      setFailed(data.failed ?? []);
       setEngine("online");
     } catch {
       setEngine("offline");
@@ -37,9 +41,11 @@ export default function Home() {
   }, [space]);
 
   useEffect(() => {
-    setDocs([]);
+    setEntries([]);
+    setProcessing([]);
+    setFailed([]);
     refresh();
-    const t = setInterval(refresh, 4_000);
+    const t = setInterval(refresh, 3_000);
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -57,7 +63,7 @@ export default function Home() {
           </div>
 
           <CaptureCard space={space} onCaptured={refresh} />
-          <MemoryFeed docs={docs} engine={engine} />
+          <MemoryFeed entries={entries} processing={processing} failed={failed} engine={engine} />
         </div>
 
         <aside className="flex flex-col gap-6 lg:pt-[76px]">

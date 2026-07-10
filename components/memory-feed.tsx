@@ -2,30 +2,49 @@
 
 import { timeAgo } from "@/lib/format";
 
-export type MemoryDoc = {
+export type MemoryEntry = {
+  id: string;
+  memory: string;
+  version: number;
+  isStatic: boolean;
+  isInference: boolean;
+  createdAt: string;
+  updatedAt: string;
+  memoryRelations: Record<string, string>;
+  history: Array<{ id: string; memory: string; version: number; createdAt: string }>;
+};
+
+export type ProcessingDoc = {
   id: string;
   status?: string | null;
   title?: string | null;
-  summary?: string | null;
   content?: string | null;
   createdAt?: string;
-  updatedAt?: string;
 };
 
-const STATUS_STYLE: Record<string, { dot: string; label: string }> = {
-  done: { dot: "bg-emerald-500", label: "remembered" },
-  queued: { dot: "bg-zinc-300", label: "queued" },
-  extracting: { dot: "bg-amber-400 animate-pulse", label: "extracting" },
-  chunking: { dot: "bg-amber-400 animate-pulse", label: "processing" },
-  embedding: { dot: "bg-amber-400 animate-pulse", label: "embedding" },
-  failed: { dot: "bg-red-400", label: "failed" },
-};
+function Badge({ tone, children }: { tone: "blue" | "violet" | "zinc" | "amber"; children: React.ReactNode }) {
+  const tones = {
+    blue: "bg-blue-50 text-blue-600",
+    violet: "bg-violet-50 text-violet-600",
+    zinc: "bg-zinc-100 text-zinc-500",
+    amber: "bg-amber-50 text-amber-600",
+  };
+  return (
+    <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider ${tones[tone]}`}>
+      {children}
+    </span>
+  );
+}
 
 export function MemoryFeed({
-  docs,
+  entries,
+  processing,
+  failed,
   engine,
 }: {
-  docs: MemoryDoc[];
+  entries: MemoryEntry[];
+  processing: ProcessingDoc[];
+  failed: ProcessingDoc[];
   engine: "online" | "offline" | "checking";
 }) {
   if (engine === "offline") {
@@ -40,37 +59,77 @@ export function MemoryFeed({
     );
   }
 
-  if (docs.length === 0) {
-    return (
-      <section className="card flex flex-col items-center gap-1.5 border-dashed px-6 py-14 text-center shadow-none">
-        <p className="text-[15px] font-medium text-zinc-700">Nothing remembered yet</p>
-        <p className="text-[13.5px] text-zinc-400">Write something above — Recall never forgets twice.</p>
-      </section>
-    );
-  }
-
   return (
     <section className="flex flex-col gap-3">
-      {docs.map((d) => {
-        const status = STATUS_STYLE[d.status ?? ""] ?? {
-          dot: "bg-zinc-300",
-          label: d.status ?? "…",
-        };
-        const text = d.title ?? d.summary ?? d.content ?? "";
-        return (
-          <article key={d.id} className="card animate-rise px-5 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className={`size-[7px] rounded-full ${status.dot}`} />
-                <span className="font-mono text-[11px] uppercase tracking-wider text-zinc-400">
-                  {status.label}
-                </span>
-              </div>
-              <span className="font-mono text-[11px] text-zinc-300">{timeAgo(d.createdAt)}</span>
-            </div>
-            <p className="mt-2 line-clamp-3 text-[14.5px] leading-relaxed text-zinc-800">
-              {String(text).slice(0, 280)}
+      {processing.map((d) => (
+        <div
+          key={d.id}
+          className="card animate-rise flex items-center gap-3 border-amber-100 bg-amber-50/40 px-5 py-3.5"
+        >
+          <span className="size-[7px] animate-pulse rounded-full bg-amber-400" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[13.5px] text-zinc-600">
+              {(d.title ?? d.content ?? "").slice(0, 90)}
             </p>
+          </div>
+          <span className="shrink-0 font-mono text-[11px] uppercase tracking-wider text-amber-600">
+            {d.status}…
+          </span>
+        </div>
+      ))}
+
+      {failed.map((d) => (
+        <div key={d.id} className="card flex items-center gap-3 border-red-100 px-5 py-3 shadow-none">
+          <span className="size-[7px] rounded-full bg-red-400" />
+          <p className="truncate text-[13px] text-zinc-500">{(d.title ?? "").slice(0, 70)}</p>
+          <span className="ml-auto shrink-0 font-mono text-[11px] text-red-400">failed</span>
+        </div>
+      ))}
+
+      {entries.length === 0 && processing.length === 0 && (
+        <div className="card flex flex-col items-center gap-1.5 border-dashed px-6 py-14 text-center shadow-none">
+          <p className="text-[15px] font-medium text-zinc-700">Nothing remembered yet</p>
+          <p className="text-[13.5px] text-zinc-400">
+            Write something above — watch it become memories in seconds.
+          </p>
+        </div>
+      )}
+
+      {entries.map((e) => {
+        const superseded = e.history.length > 0;
+        return (
+          <article key={e.id} className="card animate-rise px-5 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5">
+                {superseded && <Badge tone="blue">updated · v{e.version}</Badge>}
+                {e.isStatic && <Badge tone="zinc">stable</Badge>}
+                {e.isInference && <Badge tone="violet">inferred</Badge>}
+                {!superseded && !e.isStatic && !e.isInference && <Badge tone="zinc">memory</Badge>}
+              </div>
+              <span className="shrink-0 font-mono text-[11px] text-zinc-300">
+                {timeAgo(e.updatedAt)}
+              </span>
+            </div>
+
+            <p className="mt-2 text-[15px] leading-relaxed text-zinc-900">{e.memory}</p>
+
+            {superseded && (
+              <div className="mt-3 flex flex-col gap-1.5 border-l-2 border-zinc-100 pl-3.5">
+                {e.history
+                  .slice()
+                  .sort((a, b) => b.version - a.version)
+                  .map((h) => (
+                    <div key={h.id} className="flex items-baseline gap-2">
+                      <span className="shrink-0 font-mono text-[10px] text-zinc-300">
+                        v{h.version}
+                      </span>
+                      <p className="text-[13px] leading-relaxed text-zinc-400 line-through decoration-zinc-300">
+                        {h.memory}
+                      </p>
+                    </div>
+                  ))}
+              </div>
+            )}
           </article>
         );
       })}
