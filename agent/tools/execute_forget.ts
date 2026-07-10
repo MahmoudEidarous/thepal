@@ -3,7 +3,9 @@ import { always } from "eve/tools/approval";
 import { z } from "zod";
 import { sm, spaceTag, SPACES } from "../lib/sm";
 
-type ForgetResult = { forgotten?: unknown[]; count?: number };
+type SearchResponse = {
+  results?: Array<{ id: string; memory?: string; chunk?: string; similarity?: number }>;
+};
 
 export default defineTool({
   description:
@@ -14,12 +16,23 @@ export default defineTool({
   }),
   approval: always(),
   async execute({ about, space }) {
-    const res = await sm<ForgetResult>("/v4/memories/forget-matching", {
-      query: about,
-      containerTag: spaceTag(space),
-      dryRun: false,
-      maxForget: 20,
+    const tag = spaceTag(space);
+    const found = await sm<SearchResponse>("/v4/search", {
+      q: about,
+      containerTag: tag,
+      limit: 8,
+      threshold: 0.5,
     });
-    return { forgotten: res.count ?? (res.forgotten?.length ?? 0) };
+    const matches = (found.results ?? []).filter(
+      (r) => r.id && (r.memory ?? r.chunk) && (r.similarity ?? 0) >= 0.62,
+    );
+    for (const m of matches) {
+      await sm(
+        "/v4/memories",
+        { id: m.id, containerTag: tag, reason: `user asked to forget: ${about}` },
+        "DELETE",
+      );
+    }
+    return { forgotten: matches.length };
   },
 });

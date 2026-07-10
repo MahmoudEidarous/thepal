@@ -11,9 +11,9 @@ export function spaceTag(space: string): string {
     : "recall_personal";
 }
 
-export async function sm<T>(path: string, body: unknown): Promise<T> {
+export async function sm<T>(path: string, body: unknown, method = "POST"): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
+    method,
     headers: {
       Authorization: `Bearer ${process.env.SUPERMEMORY_API_KEY}`,
       "Content-Type": "application/json",

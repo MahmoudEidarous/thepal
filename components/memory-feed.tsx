@@ -81,8 +81,23 @@ export function MemoryFeed({
       {failed.map((d) => (
         <div key={d.id} className="card flex items-center gap-3 border-red-100 px-5 py-3 shadow-none">
           <span className="size-[7px] rounded-full bg-red-400" />
-          <p className="truncate text-[13px] text-zinc-500">{(d.title ?? "").slice(0, 70)}</p>
+          <p className="truncate text-[13px] text-zinc-500">
+            {(d.title ?? d.content ?? "").slice(0, 70)}
+          </p>
           <span className="ml-auto shrink-0 font-mono text-[11px] text-red-400">failed</span>
+          <button
+            onClick={() =>
+              void fetch("/api/document", {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: d.id }),
+              })
+            }
+            aria-label="Dismiss"
+            className="shrink-0 rounded-full px-1.5 text-[13px] leading-none text-zinc-300 hover:text-zinc-600"
+          >
+            ✕
+          </button>
         </div>
       ))}
 

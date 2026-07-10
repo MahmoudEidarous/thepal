@@ -9,10 +9,11 @@ export async function POST(request: Request) {
     if (q.length < 3) {
       return Response.json({ results: [] });
     }
+    const limit = Math.min(8, Math.max(1, Number(body.limit) || 4));
     const found = await supermemory.search.memories({
       q,
       containerTag: spaceTag(asSpace(body.space)),
-      limit: 4,
+      limit,
       threshold: 0.55,
     });
     return Response.json(found);
