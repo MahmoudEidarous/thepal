@@ -19,21 +19,45 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ── liquid glass ─────────────────────────────────────────────── */
+/* ── liquid glass ─────────────────────────────────────────────────
+   Light comes from the upper left (same direction the orb's rim
+   catches it): specular streak up top, shade at the bottom edge,
+   a whisper of the scene's indigo bleeding through. */
 @utility glass {
-  background: linear-gradient(180deg, rgb(255 255 255 / 0.055), rgb(255 255 255 / 0.025));
-  border: 1px solid rgb(255 255 255 / 0.08);
-  backdrop-filter: blur(24px);
+  position: relative;
+  background: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.07),
+    rgb(255 255 255 / 0.02) 50%,
+    rgb(255 255 255 / 0.045)
+  );
+  border: 1px solid rgb(255 255 255 / 0.12);
+  backdrop-filter: blur(20px) saturate(160%);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.06),
-    0 24px 70px -28px rgb(0 0 0 / 0.9);
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    inset 0 -1px 0 rgb(0 0 0 / 0.25),
+    0 24px 70px -28px rgb(0 0 0 / 0.9),
+    0 0 50px -24px rgb(110 130 255 / 0.25);
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 8%;
+    right: 34%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.4), transparent);
+    pointer-events: none;
+  }
 }
 
 @utility glass-chip {
-  background: linear-gradient(180deg, rgb(255 255 255 / 0.07), rgb(255 255 255 / 0.03));
-  border: 1px solid rgb(255 255 255 / 0.1);
-  backdrop-filter: blur(16px);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08);
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.08), rgb(255 255 255 / 0.03));
+  border: 1px solid rgb(255 255 255 / 0.12);
+  backdrop-filter: blur(16px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 8px 24px -12px rgb(0 0 0 / 0.6);
 }
 
 /* ── motion ───────────────────────────────────────────────────── */
@@ -84,11 +108,108 @@ body {
   animation: edge-in 1400ms ease 300ms both;
 }
 
+/* stars breathe — a slow, tiny ambient drift, unique per memory */
+@keyframes star-drift {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(var(--dx, 6px), var(--dy, -8px));
+  }
+}
+
+@utility star-drift {
+  animation: star-drift 20s ease-in-out infinite;
+}
+
+/* and they twinkle, each on its own clock */
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: var(--tw-base, 0.7);
+  }
+  50% {
+    opacity: calc(var(--tw-base, 0.7) + 0.3);
+  }
+}
+
+@utility star-twinkle {
+  animation: twinkle 6s ease-in-out infinite;
+}
+
+/* four-point flare on the brightest, most-connected memories */
+.star-flare {
+  position: absolute;
+  inset: -320%;
+  background:
+    linear-gradient(0deg, transparent 46%, rgb(220 228 255 / 0.22) 50%, transparent 54%),
+    linear-gradient(90deg, transparent 46%, rgb(220 228 255 / 0.22) 50%, transparent 54%);
+  pointer-events: none;
+}
+
+/* nebula breath behind everything */
+@keyframes aurora {
+  from {
+    transform: translate3d(-5%, -4%, 0) rotate(0deg) scale(1);
+  }
+  to {
+    transform: translate3d(6%, 5%, 0) rotate(10deg) scale(1.18);
+  }
+}
+
+@utility animate-aurora {
+  animation: aurora 90s ease-in-out infinite alternate;
+}
+
+/* a meteor, once in a long while */
+@keyframes meteor {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(-28deg);
+    opacity: 0;
+  }
+  1.5% {
+    opacity: 0.65;
+  }
+  6% {
+    transform: translate3d(-420px, 224px, 0) rotate(-28deg);
+    opacity: 0;
+  }
+  100% {
+    transform: translate3d(-420px, 224px, 0) rotate(-28deg);
+    opacity: 0;
+  }
+}
+
+@utility animate-meteor {
+  animation: meteor 34s linear infinite;
+}
+
+@keyframes hint {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@utility animate-hint {
+  animation: hint 4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-rise,
   .node-in,
-  .animate-edge {
+  .animate-edge,
+  .star-drift,
+  .star-twinkle,
+  .animate-hint,
+  .animate-aurora,
+  .animate-meteor {
     animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 

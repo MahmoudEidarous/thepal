@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import { VoiceOrb, type OrbState } from "./voice-orb";
 
@@ -57,6 +57,14 @@ function VoiceCore({
   const [pending, setPending] = useState<PendingForget | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState("");
+  // ?orb=speaking forces a visual state — QA and demo framing only.
+  // Read after mount so server and client render the same first frame.
+  const [forced, setForced] = useState<OrbState | null>(null);
+  useEffect(() => {
+    const f = new URLSearchParams(window.location.search).get("orb");
+    if (f && ["idle", "connecting", "listening", "speaking", "thinking"].includes(f))
+      setForced(f as OrbState);
+  }, []);
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
 
@@ -189,15 +197,17 @@ function VoiceCore({
   }
 
   const orbState: OrbState =
-    status === "connecting"
-      ? "connecting"
-      : !connected
-        ? "idle"
-        : activity.length > 0
-          ? "thinking"
-          : isSpeaking
-            ? "speaking"
-            : "listening";
+    forced
+      ? forced
+      : status === "connecting"
+        ? "connecting"
+        : !connected
+          ? "idle"
+          : activity.length > 0
+            ? "thinking"
+            : isSpeaking
+              ? "speaking"
+              : "listening";
 
   const lastAgent = [...lines].reverse().find((l) => l.role === "agent");
   const lastUser = [...lines].reverse().find((l) => l.role === "user");
@@ -206,15 +216,15 @@ function VoiceCore({
 
   return (
     <>
-      {/* the orb — dead center of everything */}
-      <div className="pointer-events-none absolute left-1/2 top-[42%] z-10 -translate-x-1/2 -translate-y-1/2">
+      {/* the orb — dead center of everything, and the only button you need */}
+      <div className="pointer-events-none absolute left-1/2 top-[44%] z-10 -translate-x-1/2 -translate-y-1/2">
         <div className="pointer-events-auto">
-          <VoiceOrb state={orbState} getLevel={getLevel} onClick={wake} size={300} />
+          <VoiceOrb state={orbState} getLevel={getLevel} onClick={wake} size={420} />
         </div>
       </div>
 
       {/* status + captions live in a fixed band under the orb */}
-      <div className="pointer-events-none absolute inset-x-0 top-[62%] z-20 flex flex-col items-center gap-3 px-6 text-center">
+      <div className="pointer-events-none absolute inset-x-0 top-[67%] z-20 flex flex-col items-center gap-3 px-6 text-center">
         <p className="h-4 font-mono text-[10px] uppercase tracking-[0.28em] text-zinc-500">
           {orbState === "idle"
             ? ""
@@ -226,21 +236,16 @@ function VoiceCore({
         </p>
 
         {!connected && status !== "connecting" && (
-          <div className="pointer-events-auto max-w-lg">
-            <h1 className="text-[clamp(26px,3.6vw,36px)] font-semibold leading-[1.15] tracking-[-0.02em] text-white">
+          <div className="pointer-events-auto flex flex-col items-center gap-4">
+            <p className="text-[17px] font-light tracking-[0.01em] text-zinc-300">
               {greeting}
               {greetingName ? `, ${greetingName}` : ""}.
-              <br />
-              <span className="text-zinc-500">Just talk.</span>
-            </h1>
-            <p className="mx-auto mt-3 max-w-sm text-[13.5px] leading-relaxed text-zinc-500">
-              Your memories orbit above — every one of them lives on this machine.
             </p>
             <button
               onClick={wake}
-              className="mt-7 rounded-full bg-white px-7 py-3 text-[13.5px] font-semibold text-zinc-950 shadow-[0_0_0_1px_rgb(255_255_255/0.1),0_16px_50px_-12px_rgb(120_140_255/0.45)] transition-all hover:scale-[1.03] hover:shadow-[0_0_0_1px_rgb(255_255_255/0.2),0_20px_60px_-12px_rgb(120_140_255/0.6)] active:scale-[0.99]"
+              className="animate-hint font-mono text-[10px] uppercase tracking-[0.42em] text-zinc-600 transition-colors duration-300 hover:text-zinc-300"
             >
-              Start talking
+              tap the orb to talk
             </button>
           </div>
         )}
@@ -266,6 +271,13 @@ function VoiceCore({
         )}
       </div>
 
+      {/* the pitch, whispered */}
+      {!connected && status !== "connecting" && (
+        <p className="pointer-events-none absolute inset-x-0 bottom-7 z-20 text-center font-mono text-[9.5px] uppercase tracking-[0.32em] text-zinc-700">
+          every memory lives on this machine
+        </p>
+      )}
+
       {/* liquid-glass controls */}
       {connected && (
         <div className="absolute inset-x-0 bottom-8 z-30 flex items-center justify-center gap-3.5">
@@ -273,7 +285,7 @@ function VoiceCore({
             onClick={() => conversation.setMuted(!conversation.isMuted)}
             aria-label={conversation.isMuted ? "Unmute microphone" : "Mute microphone"}
             className={
-              "glass-chip flex size-12 items-center justify-center rounded-full transition-all hover:scale-105 " +
+              "glass-chip flex size-12 items-center justify-center rounded-full transition-all hover:scale-105 hover:shadow-[0_0_28px_-6px_rgb(130_150_255/0.5)] " +
               (conversation.isMuted
                 ? "text-amber-300 hover:border-amber-300/40"
                 : "text-zinc-300 hover:border-white/25 hover:text-white")
@@ -290,14 +302,14 @@ function VoiceCore({
                 conversation.sendUserActivity();
               }}
               placeholder="or type it"
-              className="glass-chip h-12 w-60 rounded-full px-5 text-center text-[13.5px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25 sm:w-72"
+              className="glass-chip h-12 w-60 rounded-full px-5 text-center text-[13.5px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25 focus:shadow-[0_0_36px_-8px_rgb(130_150_255/0.45)] sm:w-72"
             />
           </form>
 
           <button
             onClick={() => void conversation.endSession()}
             aria-label="End the conversation"
-            className="glass-chip flex size-12 items-center justify-center rounded-full text-zinc-300 transition-all hover:scale-105 hover:border-red-400/50 hover:bg-red-500/10 hover:text-red-300"
+            className="glass-chip flex size-12 items-center justify-center rounded-full text-zinc-300 transition-all hover:scale-105 hover:border-red-400/50 hover:bg-red-500/10 hover:text-red-300 hover:shadow-[0_0_28px_-6px_rgb(248_113_113/0.45)]"
           >
             <EndIcon />
           </button>
