@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEveAgent } from "eve/react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Space } from "@/lib/spaces";
 
 const SUGGESTIONS = [
@@ -9,6 +11,14 @@ const SUGGESTIONS = [
   "What do you know about me?",
   "What have I committed to this week?",
 ];
+
+const TOOL_LABELS: Record<string, string> = {
+  search_memories: "searching memories",
+  get_profile: "reading your profile",
+  add_memory: "saving a memory",
+  preview_forget: "previewing forget",
+  execute_forget: "forgetting",
+};
 
 type AnyPart = {
   type: string;
@@ -26,24 +36,27 @@ function ToolChip({ part }: { part: AnyPart }) {
   return (
     <span
       className={
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[11px] tracking-wide " +
+        "inline-flex w-fit items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[11px] tracking-wide " +
         (running
           ? "animate-pulse border-amber-200 bg-amber-50 text-amber-700"
           : "border-black/[0.07] bg-zinc-50 text-zinc-500")
       }
     >
       <span className={"size-[5px] rounded-full " + (running ? "bg-amber-400" : "bg-emerald-500")} />
-      {name}
+      {running ? (TOOL_LABELS[name] ?? name) : name}
     </span>
   );
 }
 
 export function ChatPanel({ space }: { space: Space }) {
   const [input, setInput] = useState("");
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const agent = useEveAgent({
     prepareSend: (turn) => ({ ...turn, clientContext: { space } }),
   });
   const busy = agent.status === "submitted" || agent.status === "streaming";
+  const failed = agent.status === "error";
 
   // Pending human-in-the-loop approval (e.g. execute_forget), if any.
   const pendingRequest = agent.data.messages
@@ -51,15 +64,22 @@ export function ChatPanel({ space }: { space: Space }) {
     ?.parts.map((p) => (p as AnyPart).toolMetadata?.eve?.inputRequest)
     .find(Boolean);
 
+  // Follow the conversation as it streams.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [agent.data.messages, busy, pendingRequest]);
+
   function ask(text: string) {
     if (!text.trim() || busy) return;
     void agent.send({ message: text.trim() });
     setInput("");
+    inputRef.current?.focus();
   }
 
   return (
-    <section className="card flex min-h-[420px] flex-col p-5">
-      <div className="flex flex-1 flex-col gap-4 overflow-y-auto">
+    <section className="card flex h-[clamp(420px,calc(100dvh-320px),640px)] flex-col p-5">
+      <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
         {agent.data.messages.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 py-10 text-center">
             <p className="text-[15px] text-zinc-400">
@@ -91,9 +111,9 @@ export function ChatPanel({ space }: { space: Space }) {
                   const part = p as AnyPart;
                   if (part.type === "text" && part.text?.trim()) {
                     return (
-                      <p key={i} className="whitespace-pre-wrap text-[14.5px] leading-relaxed text-zinc-800">
-                        {part.text}
-                      </p>
+                      <div key={i} className="md text-[14.5px] leading-relaxed text-zinc-800">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{part.text}</ReactMarkdown>
+                      </div>
                     );
                   }
                   if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
@@ -122,7 +142,7 @@ export function ChatPanel({ space }: { space: Space }) {
                     "pill " +
                     (o.id === "approve" || /approve|yes/i.test(o.label ?? o.id)
                       ? "bg-red-600 text-white hover:opacity-85"
-                      : "border border-black/[0.1] bg-white text-zinc-600")
+                      : "border border-black/[0.1] bg-white text-zinc-600 hover:border-black/[0.2]")
                   }
                 >
                   {o.label ?? o.id}
@@ -137,6 +157,12 @@ export function ChatPanel({ space }: { space: Space }) {
             thinking…
           </span>
         )}
+
+        {failed && (
+          <div className="rounded-xl bg-red-50 px-4 py-2.5 text-[13px] text-red-600">
+            {agent.error?.message ?? "Something went wrong."} — try asking again.
+          </div>
+        )}
       </div>
 
       <form
@@ -147,10 +173,11 @@ export function ChatPanel({ space }: { space: Space }) {
         }}
       >
         <input
+          ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ask your memory…"
-          disabled={busy}
+          autoFocus
           className="flex-1 bg-transparent text-[15px] text-zinc-900 outline-none placeholder:text-zinc-400"
         />
         <button
