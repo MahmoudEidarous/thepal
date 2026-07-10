@@ -43,3 +43,7 @@ next-env.d.ts
 
 # supermemory local data (never commit)
 .supermemory/
+
+# eve runtime state (generated)
+/.eve/
+/.workflow-data/
