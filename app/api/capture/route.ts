@@ -1,27 +1,74 @@
 import { supermemory, spaceTag } from "@/lib/supermemory";
 import { apiError, asSpace } from "@/lib/validate";
+import { enrich, localToday, redactSecrets, type Envelope } from "@/lib/envelope";
 
+// The Writer. Every memory — spoken, typed, or dropped as a file —
+// passes through here once, gets its secrets stripped locally, and is
+// wrapped in a write-time envelope (type, provenance, story-date, due,
+// weight, salience, entities, phrasing hints). Labels are written now
+// so the read side never has to reconstruct them later.
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
-    const content = typeof body.content === "string" ? body.content.trim() : "";
-    if (!content) {
+    const raw = typeof body.content === "string" ? body.content.trim() : "";
+    if (!raw) {
       return Response.json({ error: "content required" }, { status: 400 });
     }
-    const kind = ["memory", "decision", "commitment", "briefing"].includes(body.kind)
+
+    // secrets are removed on this machine, before any model sees them
+    const { text: safe, redacted: preRedacted } = redactSecrets(raw);
+
+    const today = localToday();
+    const source = typeof body.source === "string" ? body.source : "recall-app";
+    const envelope: Envelope | null = await enrich(safe, source, today);
+
+    // eval harness: return the envelope without persisting anything
+    if (body.dryRun === true) {
+      return Response.json({ envelope, preRedacted });
+    }
+
+    // the engine embeds what we store — writing the alternate phrasings
+    // into the document makes retrieval phrasing-robust for free
+    const hints = envelope?.hints?.length
+      ? `\n\n(answers: ${envelope.hints.join(" · ")})`
+      : "";
+    const content = (envelope?.text ?? safe) + hints;
+
+    const kindFallback = ["memory", "decision", "commitment", "briefing"].includes(body.kind)
       ? (body.kind as string)
       : "memory";
+
     const doc = await supermemory.add({
       content,
       containerTag: spaceTag(asSpace(body.space)),
       metadata: {
-        source: typeof body.source === "string" ? body.source : "recall-app",
-        type: kind,
-        ...(typeof body.due === "string" && body.due ? { due: body.due } : {}),
-        ...(kind === "commitment" ? { status: "open" } : {}),
+        source,
+        type: envelope?.type ?? kindFallback,
+        provenance: envelope?.provenance ?? "stated",
+        salience: envelope?.salience ?? 0.5,
+        valence: envelope?.valence ?? 0,
+        intensity: envelope?.intensity ?? 0,
+        redacted: envelope?.redacted || preRedacted,
+        ...(envelope?.storyDate ? { storyDate: envelope.storyDate } : {}),
+        ...(envelope?.entities?.length
+          ? {
+              entities: envelope.entities
+                .map((e) => [e.name, ...e.aliases].join("/"))
+                .join(", "),
+            }
+          : {}),
+        // the typed ledger: commitments open here, close by voice
+        ...(envelope?.type === "commitment" || kindFallback === "commitment"
+          ? {
+              status: "open",
+              ...(envelope?.due ?? (typeof body.due === "string" && body.due)
+                ? { due: envelope?.due ?? body.due }
+                : {}),
+            }
+          : {}),
       },
     });
-    return Response.json(doc);
+    return Response.json({ ...doc, envelope: envelope ?? undefined });
   } catch (err) {
     return apiError(err);
   }
