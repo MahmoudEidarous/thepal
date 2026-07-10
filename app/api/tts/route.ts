@@ -1,15 +1,19 @@
 // Voice for dream briefings — ElevenLabs TTS, streamed back as audio.
 export async function POST(request: Request) {
-  const { text } = await request.json();
+  const { text } = await request.json().catch(() => ({}));
   if (typeof text !== "string" || !text.trim()) {
     return Response.json({ error: "text required" }, { status: 400 });
+  }
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) {
+    return Response.json({ error: "ELEVENLABS_API_KEY is not set" }, { status: 503 });
   }
   const res = await fetch(
     "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM?output_format=mp3_44100_128",
     {
       method: "POST",
       headers: {
-        "xi-api-key": process.env.ELEVENLABS_API_KEY!,
+        "xi-api-key": apiKey,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
