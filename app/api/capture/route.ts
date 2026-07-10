@@ -32,7 +32,9 @@ export async function POST(request: Request) {
     const hints = envelope?.hints?.length
       ? `\n\n(answers: ${envelope.hints.join(" · ")})`
       : "";
-    const content = (envelope?.text ?? safe) + hints;
+    // utterances get the cleaned text; whole documents keep their body —
+    // the engine extracts many memories from them and needs all of it
+    const content = (safe.length > 800 ? safe : (envelope?.text ?? safe)) + hints;
 
     const kindFallback = ["memory", "decision", "commitment", "briefing"].includes(body.kind)
       ? (body.kind as string)
@@ -68,6 +70,30 @@ export async function POST(request: Request) {
           : {}),
       },
     });
+    // commitments buried inside a longer note become their own ledger
+    // entries — drop a document, and your agenda updates itself
+    const embedded = (envelope?.commitments ?? []).filter(
+      (c) => c.content.trim() && envelope?.type !== "commitment",
+    );
+    await Promise.all(
+      embedded.map((c) =>
+        supermemory
+          .add({
+            content: c.content.trim(),
+            containerTag: spaceTag(asSpace(body.space)),
+            metadata: {
+              source: `${source}#ledger`,
+              type: "commitment",
+              provenance: envelope?.provenance ?? "stated",
+              salience: 0.8,
+              status: "open",
+              ...(c.due ? { due: c.due } : {}),
+            },
+          })
+          .catch(() => {}),
+      ),
+    );
+
     return Response.json({ ...doc, envelope: envelope ?? undefined });
   } catch (err) {
     return apiError(err);

@@ -140,6 +140,24 @@ const CASES = [
       e.hints.length >= 1 &&
       e.hints.some((h) => !h.toLowerCase().includes("landlord") || h.includes("?")),
   },
+  {
+    name: "deadline buried in a note reaches the ledger",
+    critical: true,
+    content:
+      "# Berlin loose ends\n\nThe apartment is coming together. Still need to register at the Bürgeramt — the appointment is on July 20th, cannot miss it.\n\nLandlord is Herr Weber. Rent 1450 euros, due the first of each month.",
+    check: (e) =>
+      e.type !== "commitment" &&
+      (e.commitments ?? []).some(
+        (c) => c.due?.endsWith("07-20") && c.content.toLowerCase().includes("bürgeramt"),
+      ) &&
+      // recurring rent must NOT become a ledger item
+      !(e.commitments ?? []).some((c) => c.content.toLowerCase().includes("rent")),
+  },
+  {
+    name: "plain utterance has no embedded commitments",
+    content: "I love Berlin in the summer.",
+    check: (e) => (e.commitments ?? []).length === 0,
+  },
 ];
 
 let pass = 0;

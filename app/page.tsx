@@ -74,6 +74,9 @@ export default function Home() {
   const [engine, setEngine] = useState<Engine>("checking");
   const [selected, setSelected] = useState<MemoryEntry | null>(null);
   const [name, setName] = useState<string | undefined>(undefined);
+  const [dragging, setDragging] = useState(false);
+  const [dropNote, setDropNote] = useState<string | null>(null);
+  const dragDepth = useRef(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -113,8 +116,54 @@ export default function Home() {
       .catch(() => {});
   }, []);
 
+  // feed the sky: drop notes onto the constellation, watch them hatch
+  async function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = Array.from(e.dataTransfer.files).slice(0, 8);
+    const notes = files.filter(
+      (f) => /\.(md|markdown|txt|text)$/i.test(f.name) || f.type.startsWith("text/"),
+    );
+    if (!notes.length) {
+      setDropNote("only text for now — .md or .txt");
+      setTimeout(() => setDropNote(null), 3500);
+      return;
+    }
+    setDropNote(`reading ${notes.length} note${notes.length > 1 ? "s" : ""} into memory…`);
+    await Promise.all(
+      notes.map(async (f) => {
+        const content = (await f.text()).slice(0, 64_000).trim();
+        if (!content) return;
+        await fetch("/api/capture", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content, source: `drop:${f.name}` }),
+        }).catch(() => {});
+      }),
+    );
+    refresh();
+    setTimeout(() => setDropNote(null), 3000);
+  }
+
   return (
-    <div className="relative h-dvh overflow-hidden">
+    <div
+      className="relative h-dvh overflow-hidden"
+      onDragEnter={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        dragDepth.current++;
+        setDragging(true);
+      }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={() => {
+        if (--dragDepth.current <= 0) {
+          dragDepth.current = 0;
+          setDragging(false);
+        }
+      }}
+      onDrop={onDrop}
+    >
       {/* atmosphere — nebulae drifting behind everything */}
       <div
         aria-hidden
@@ -169,12 +218,57 @@ export default function Home() {
               {engine === "online" ? "local" : engine === "offline" ? "offline" : "…"}
             </span>
           </div>
+          <a
+            href="/api/export"
+            download
+            aria-label="Export your brain as Markdown"
+            title="Export your brain (.md)"
+            className="glass-chip flex size-9 items-center justify-center rounded-full text-zinc-400 transition-all hover:scale-105 hover:border-white/25 hover:text-zinc-200"
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M12 3v12" />
+              <path d="m7 10 5 5 5-5" />
+              <path d="M5 21h14" />
+            </svg>
+          </a>
           <DreamPopover />
         </div>
       </header>
 
       {/* the voice — the main event */}
-      <VoicePanel engine={engine} greetingName={name} memoryCount={entries.length} />
+      <VoicePanel
+        engine={engine}
+        greetingName={name}
+        memoryCount={entries.length}
+        selectedMemory={selected?.memory ?? null}
+      />
+
+      {/* feed the sky — drop target veil */}
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 z-[70] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="glass animate-rise rounded-3xl px-10 py-8 text-center">
+            <p className="text-[17px] font-light text-zinc-100">Drop it into the sky.</p>
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.3em] text-zinc-500">
+              .md · .txt — read, enriched, remembered
+            </p>
+          </div>
+        </div>
+      )}
+      {dropNote && (
+        <p className="glass-chip animate-rise absolute bottom-20 left-1/2 z-[70] -translate-x-1/2 rounded-full px-4 py-2 font-mono text-[10.5px] tracking-[0.12em] text-zinc-300">
+          {dropNote}
+        </p>
+      )}
 
       {/* film grain over the whole scene */}
       <div

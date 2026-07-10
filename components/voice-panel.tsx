@@ -54,10 +54,12 @@ function VoiceCore({
   engine,
   greetingName,
   memoryCount,
+  selectedMemory,
 }: {
   engine: Engine;
   greetingName?: string;
   memoryCount: number;
+  selectedMemory?: string | null;
 }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
@@ -139,6 +141,20 @@ function VoiceCore({
   useEffect(() => {
     isSpeakingRef.current = isSpeaking;
   }, [isSpeaking]);
+
+  // the agent sees what you're looking at: clicking a star mid-session
+  // tells it, so "what about this one?" just works
+  useEffect(() => {
+    if (!connected || !selectedMemory) return;
+    try {
+      conversation.sendContextualUpdate(
+        `The user just selected a memory star on screen: "${selectedMemory}". If they say "this" or "that one", they mean this memory. Don't comment unless they bring it up.`,
+      );
+    } catch {
+      // context is best-effort — never break the session over it
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMemory, connected]);
 
   const getLevel = useCallback(() => {
     try {
@@ -530,6 +546,7 @@ export function VoicePanel(props: {
   engine: Engine;
   greetingName?: string;
   memoryCount: number;
+  selectedMemory?: string | null;
 }) {
   return (
     <ConversationProvider>

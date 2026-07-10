@@ -31,6 +31,11 @@ export const EnvelopeSchema = z.object({
   entities: z.array(z.object({ name: z.string(), aliases: z.array(z.string()) })).max(6),
   hints: z.array(z.string()).min(1).max(3),
   redacted: z.boolean(),
+  // promises/deadlines found INSIDE a longer message — each becomes its
+  // own ledger entry. Empty when the message itself IS the commitment.
+  commitments: z
+    .array(z.object({ content: z.string(), due: z.string().nullable() }))
+    .max(5),
 });
 
 export type Envelope = z.infer<typeof EnvelopeSchema>;
@@ -66,7 +71,7 @@ export function redactSecrets(text: string): { text: string; redacted: boolean }
 const RULES = `You are the write-side enricher of a personal memory system. One message arrives; you emit its envelope so the read side never has to guess. Output every field.
 
 field rules:
-- text: the memory cleaned for keeping, meaning intact. Keep any [redacted] markers exactly; set redacted=true if present.
+- text: the memory cleaned for keeping, meaning intact. Keep any [redacted] markers exactly; set redacted=true if present. When type=commitment, text is the promise itself and nothing else.
 - type, exactly one:
   safety = allergies, medical constraints, sobriety — a wrong suggestion causes harm. Outranks everything.
   boundary = an explicit don't/limit the user set ("never suggest X").
@@ -82,11 +87,14 @@ field rules:
 - valence −1..1, intensity 0..1: what the moment cost or meant emotionally.
 - salience 0..1: identity, relationships, health, hard deadlines high; trivia low.
 - entities: people/places/projects, alternate spellings as aliases of one entity.
-- hints: 1-3 rephrasings or questions this memory answers, using DIFFERENT words than the original.`;
+- hints: 1-3 rephrasings or questions this memory answers, using DIFFERENT words than the original.
+- commitments: promises or hard deadlines buried INSIDE a longer message (notes, documents), each as a standalone statement with its due date resolved. Empty when there are none — or when the whole message is itself the commitment (then use type=commitment instead).`;
 
 async function callEnricher(model: string, prompt: string, timeoutMs: number): Promise<Envelope> {
   const { object } = await generateObject({
-    model: openrouter(model),
+    // route to the fastest provider — slow upstreams were the main
+    // source of enrichment timeouts
+    model: openrouter(model, { extraBody: { provider: { sort: "throughput" } } }),
     schema: EnvelopeSchema,
     system: RULES,
     prompt,
@@ -112,19 +120,53 @@ export async function enrich(
   const [y, m, d] = today.split("-").map(Number);
   const weekday = WEEKDAYS[new Date(y, m - 1, d).getDay()];
   const prompt = `today: ${today} (${weekday})\nsource: ${source}\n\nmessage:\n${rawContent.slice(0, 6000)}`;
-  try {
-    return await callEnricher(MODEL_FLASH, prompt, 9_000);
-  } catch {
-    try {
-      // flash occasionally stalls behind a slow provider — the retry
-      // escalates to pro, which routes more reliably
-      return await callEnricher(MODEL_PRO, prompt, 14_000);
-    } catch (err) {
-      console.warn(
-        "envelope: enrichment failed, storing raw —",
-        err instanceof Error ? err.message : err,
-      );
-      return null;
-    }
-  }
+  // some inputs are deterministically slow to envelope (dense notes with
+  // embedded commitments) — the budget must outlast them. Typical calls
+  // finish in 3-7s; the ceiling only matters when it would otherwise
+  // null a perfectly good envelope. Documents get even more room.
+  const timeoutMs = rawContent.length > 1200 ? 40_000 : 25_000;
+
+  // hedged race: flash goes first; if it hasn't answered in 3.5s (or
+  // fails outright), pro launches and the first success wins. Sequential
+  // retry doubled the pain when a provider stalled — the hedge caps it.
+  return new Promise<Envelope | null>((resolve) => {
+    let done = false;
+    let proStarted = false;
+    let flashFailed = false;
+    let proFailed = false;
+    const finish = (v: Envelope) => {
+      if (!done) {
+        done = true;
+        resolve(v);
+      }
+    };
+    const giveUp = (err: unknown) => {
+      if (!done) {
+        done = true;
+        console.warn(
+          "envelope: enrichment failed, storing raw —",
+          err instanceof Error ? err.message : err,
+        );
+        resolve(null);
+      }
+    };
+    const onProFail = (e: unknown) => {
+      proFailed = true;
+      if (flashFailed) giveUp(e);
+    };
+    const startPro = () => {
+      if (done || proStarted) return;
+      proStarted = true;
+      clearTimeout(timer);
+      callEnricher(MODEL_PRO, prompt, timeoutMs).then(finish).catch(onProFail);
+    };
+    callEnricher(MODEL_FLASH, prompt, timeoutMs)
+      .then(finish)
+      .catch((e) => {
+        flashFailed = true;
+        if (proFailed) giveUp(e);
+        else startPro();
+      });
+    const timer = setTimeout(startPro, 3_500);
+  });
 }
