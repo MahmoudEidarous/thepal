@@ -1,0 +1,41 @@
+{
+  "eventType": "attr_set",
+  "specVersion": 5,
+  "eventData": {
+    "changes": [
+      {
+        "key": "$eve.model",
+        "value": "openrouter/deepseek/deepseek-v4-pro"
+      },
+      {
+        "key": "$eve.input_tokens",
+        "value": "14153"
+      },
+      {
+        "key": "$eve.output_tokens",
+        "value": "1131"
+      },
+      {
+        "key": "$eve.cache_read_tokens",
+        "value": "8704"
+      },
+      {
+        "key": "$eve.cache_write_tokens",
+        "value": "0"
+      },
+      {
+        "key": "$eve.tool_count",
+        "value": "16"
+      }
+    ],
+    "writer": {
+      "type": "step",
+      "stepId": "step_01KX4WNWJRAZ8WDF0XYYZE99RD",
+      "attempt": 1
+    },
+    "allowReservedAttributes": true
+  },
+  "runId": "wrun_01KX4WNWJRE2B3HWGRFBTXFHSM",
+  "eventId": "evnt_01KX4WPX7DXJXPGVZ6CESCYHG6",
+  "createdAt": "2026-07-10T02:11:38.349Z"
+}
