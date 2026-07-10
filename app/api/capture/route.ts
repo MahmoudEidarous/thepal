@@ -51,6 +51,7 @@ export async function POST(request: Request) {
         valence: envelope?.valence ?? 0,
         intensity: envelope?.intensity ?? 0,
         redacted: envelope?.redacted || preRedacted,
+        ...(envelope?.hints?.length ? { hints: envelope.hints.join(" · ") } : {}),
         ...(envelope?.storyDate ? { storyDate: envelope.storyDate } : {}),
         ...(envelope?.entities?.length
           ? {

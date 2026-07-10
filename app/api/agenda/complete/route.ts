@@ -10,8 +10,9 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const q = typeof body.q === "string" ? body.q.trim().toLowerCase() : "";
-    if (!q) {
-      return Response.json({ error: "q required" }, { status: 400 });
+    const id = typeof body.id === "string" ? body.id : "";
+    if (!q && !id) {
+      return Response.json({ error: "q or id required" }, { status: 400 });
     }
     const tag = spaceTag(asSpace(body.space));
     const open = await openCommitments(tag);
@@ -19,23 +20,25 @@ export async function POST(request: Request) {
       return Response.json({ error: "no open commitments" }, { status: 404 });
     }
 
-    // best token-overlap match — commitments are short, this is enough
-    const qTokens = new Set(q.split(/\W+/).filter((t: string) => t.length > 2));
-    const scored = open
-      .map((c) => {
-        const tokens = c.content.toLowerCase().split(/\W+/);
-        const hits = tokens.filter((t) => qTokens.has(t)).length;
-        return { c, score: hits };
-      })
-      .sort((a, b) => b.score - a.score);
-    if (scored[0].score === 0) {
+    let match = id ? open.find((c) => c.id === id) : undefined;
+    if (!match && q) {
+      // best token-overlap match — commitments are short, this is enough
+      const qTokens = new Set(q.split(/\W+/).filter((t: string) => t.length > 2));
+      const scored = open
+        .map((c) => {
+          const tokens = c.content.toLowerCase().split(/\W+/);
+          const hits = tokens.filter((t) => qTokens.has(t)).length;
+          return { c, score: hits };
+        })
+        .sort((a, b) => b.score - a.score);
+      if (scored[0].score > 0) match = scored[0].c;
+    }
+    if (!match) {
       return Response.json(
         { error: "no open commitment matches that", open: open.map((c) => c.content) },
         { status: 404 },
       );
     }
-
-    const match = scored[0].c;
     const today = localToday();
     await smRequest("PATCH", `/v3/documents/${match.id}`, {
       metadata: { ...match.metadata, status: "done", completedAt: today },

@@ -435,11 +435,14 @@ function VoiceCore({
                 : "tap the orb to talk"}
             </button>
             {agenda.open > 0 && (
-              <p className="glass-chip animate-rise rounded-full px-3.5 py-1.5 font-mono text-[10px] tracking-[0.14em] text-zinc-400">
+              <a
+                href="/brain?tab=ledger"
+                className="glass-chip animate-rise rounded-full px-3.5 py-1.5 font-mono text-[10px] tracking-[0.14em] text-zinc-400 transition-all hover:border-amber-300/30 hover:text-zinc-200"
+              >
                 <span className="mr-2 inline-block size-[5px] rounded-full bg-amber-300/90 align-middle shadow-[0_0_8px_1px_rgb(252_211_77/0.5)]" />
                 {agenda.open} open commitment{agenda.open > 1 ? "s" : ""}
                 {agenda.next ? ` · ${agenda.next}` : ""}
-              </p>
+              </a>
             )}
           </div>
         )}

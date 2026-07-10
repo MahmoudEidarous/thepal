@@ -55,6 +55,38 @@ export async function openCommitments(tag: string): Promise<OpenCommitment[]> {
   return full.filter((c) => c.content);
 }
 
+export type LedgerItem = {
+  id: string;
+  content: string;
+  due: string | null;
+  status: "open" | "done";
+  completedAt: string | null;
+  createdAt?: string;
+};
+
+// The full ledger, both sides: open promises and the done archive.
+// Done things stay done — they're history, not deletions.
+export async function allCommitments(tag: string): Promise<LedgerItem[]> {
+  const docs = (await listDocs(tag)).filter((d) => d.metadata?.type === "commitment");
+  const full = await Promise.all(
+    docs.map(async (d) => {
+      const got = (await supermemory.documents
+        .get(d.id)
+        .catch(() => null)) as { content?: string | null } | null;
+      return {
+        id: d.id,
+        content: stripHints(got?.content ?? d.content ?? d.title ?? d.summary ?? ""),
+        due: typeof d.metadata?.due === "string" ? (d.metadata.due as string) : null,
+        status: (d.metadata?.status === "done" ? "done" : "open") as "open" | "done",
+        completedAt:
+          typeof d.metadata?.completedAt === "string" ? (d.metadata.completedAt as string) : null,
+        createdAt: d.createdAt,
+      };
+    }),
+  );
+  return full.filter((c) => c.content);
+}
+
 // SAFETY and boundaries are pinned: injected into every session at
 // connect, never dependent on retrieval again.
 export async function pinned(tag: string): Promise<string[]> {
