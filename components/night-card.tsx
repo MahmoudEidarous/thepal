@@ -69,7 +69,7 @@ export function NightCard() {
   }
 
   return (
-    <aside className="glass animate-rise absolute bottom-7 left-6 z-30 w-[min(88vw,370px)] rounded-3xl p-5">
+    <aside className="glass animate-rise absolute bottom-7 left-6 z-30 max-h-[46dvh] w-[min(88vw,370px)] overflow-y-auto rounded-3xl p-5">
       <div className="flex items-center gap-2">
         <svg
           width="13"

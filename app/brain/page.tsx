@@ -478,10 +478,43 @@ export default function Brain() {
         }
       }
     }
+    // fold same-kind name-subsets ("pilot" into "Leipzig pilot",
+    // "German class" into "German A2 class") — the envelope names the
+    // same storyline differently on different days
+    {
+      const ents = [...map.entries()];
+      const topKind = (e: (typeof ents)[0][1]) =>
+        [...e.kinds.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? "thing";
+      for (const [key, e] of ents) {
+        const tokens = new Set(key.split(/\s+/));
+        if (!map.has(key)) continue;
+        const host = ents.find(
+          ([k2, e2]) =>
+            k2 !== key &&
+            map.has(k2) &&
+            topKind(e2) === topKind(e) &&
+            // fold small into strictly bigger — never a city into its flat
+            e2.items.length > e.items.length &&
+            k2.split(/\s+/).length > tokens.size &&
+            [...tokens].every((t) => k2.split(/\s+/).includes(t)),
+        );
+        if (host) {
+          e.items.forEach((c) => addTo(host[1], c, topKind(e)));
+          host[1].aliases.add(e.name);
+          e.aliases.forEach((a) => host[1].aliases.add(a));
+          map.delete(key);
+        }
+      }
+    }
     return [...map.values()]
       .map((e) => ({
-        name: e.name,
-        aliases: [...e.aliases].filter((a) => a.toLowerCase() !== e.name.toLowerCase()),
+        name: e.name.charAt(0).toUpperCase() + e.name.slice(1),
+        aliases: [...e.aliases].filter(
+          (a) =>
+            a.toLowerCase() !== e.name.toLowerCase() &&
+            // the enricher occasionally hallucinates translated aliases
+            !/[^ -ɏḀ-ỿ]/.test(a),
+        ),
         items: e.items.slice().sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
         types: [...e.types.entries()].sort((a, b) => b[1] - a[1]),
         kind: [...e.kinds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "thing",
@@ -522,7 +555,7 @@ export default function Brain() {
           <span className="inline-block size-[5px] rounded-full bg-blue-400" />
         </Link>
 
-        <nav className="glass-chip flex items-center gap-1 rounded-full p-1">
+        <nav className="glass-chip flex max-w-[calc(100vw-120px)] items-center gap-1 overflow-x-auto rounded-full p-1">
           {(
             [
               ["graph", entries.length],
@@ -535,7 +568,7 @@ export default function Brain() {
               key={v}
               onClick={() => setView(v)}
               className={
-                "flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[12px] font-medium transition-all " +
+                "flex shrink-0 items-center gap-1.5 rounded-full px-4 py-1.5 text-[12px] font-medium transition-all " +
                 (view === v
                   ? "bg-white/10 text-zinc-100 shadow-[inset_0_1px_0_rgb(255_255_255/0.1)]"
                   : "text-zinc-500 hover:text-zinc-200")
@@ -562,7 +595,7 @@ export default function Brain() {
 
         <Link
           href="/"
-          className="glass-chip rounded-full px-3.5 py-2 text-[12px] text-zinc-400 transition-colors hover:text-zinc-100"
+          className="glass-chip hidden rounded-full px-3.5 py-2 text-[12px] text-zinc-400 transition-colors hover:text-zinc-100 sm:block"
         >
           ← talk
         </Link>

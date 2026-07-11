@@ -162,7 +162,7 @@ export default function Home() {
             href="/brain"
             aria-label="Open the brain — your memory graph"
             title="The brain"
-            className="glass-chip flex items-center gap-2 rounded-full px-3.5 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-400 transition-all hover:border-white/25 hover:text-zinc-100"
+            className="glass-chip flex items-center gap-2 whitespace-nowrap rounded-full px-3.5 py-2 font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-400 transition-all hover:border-white/25 hover:text-zinc-100"
           >
             <svg
               width="13"
