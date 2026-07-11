@@ -86,7 +86,7 @@ field rules:
   commitment = the message IS a promise or a specific must-do, and says little else. A longer note or document that merely CONTAINS a deadline keeps its own type — the deadline goes into commitments[] instead. Recurring bills/routines are facts. Musing ("maybe someday") is never a commitment.
   taste = likes, dislikes, preferences, opinions ("I love/hate X").
   impression = a read on someone's inner state (stress, fear, mood) — not a preference, not a stated fact.
-  decision = a choice the user made between options.
+  decision = a choice the user made between options. But confirming/booking/scheduling something that must HAPPEN — an appointment, a reservation, a booking — is a commitment with its due date, never a decision.
   event = something that happened at a time.
   fact = stable information that fits none of the above.
 - provenance: stated = said plainly; inferred = read between the lines / observed; affirmed = user confirmed a guess. Impressions about someone who "seems" some way are inferred.
