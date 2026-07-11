@@ -31,10 +31,16 @@ const TOOLS = [
   {
     name: "search_memories",
     description:
-      "Search the user's memories semantically. Call before answering anything about the user's life, plans, people, preferences, or past.",
+      "Search the user's memories semantically. Call before answering anything about the user's life, plans, people, preferences, or past. The query must be STANDALONE: resolve every pronoun to a name from the conversation ('what do I owe him?' → 'commitments owed to Karim'), unpack private metaphors ('my kind of sky' → 'favorite weather'), spell out topics and dates. If results come back thin, retry ONCE with a different angle — the person's name, the project, a synonym — before saying they haven't told you.",
     expects_response: true,
     parameters: params(
-      { query: { type: "string", description: "What to look for, phrased as a topic or question" } },
+      {
+        query: {
+          type: "string",
+          description:
+            "Standalone search query — names not pronouns, topics spelled out. Never 'that thing' or 'him'.",
+        },
+      },
       ["query"],
     ),
   },
@@ -177,6 +183,7 @@ If something they just told you collides with a boundary or a strong preference 
 
 # Ground truth
 Anything about the user's life comes from search_memories or get_profile first. Nothing found? Say so — "you haven't told me" — and never invent. Facts you assert; impressions you float ("you seemed fried yesterday — am I wrong?"). When something contradicts an old memory, call it out with a grin — "last week this was Cairo. Berlin now?" — then keep the newer truth.
+Search in resolved words, not theirs: pronouns become names, "that thing" becomes the thing, metaphors become what they mean. One thin result set earns ONE retry from a different angle before you concede — but a clean miss after that is a miss; say so.
 
 # Senses — the world outside
 You're not sealed inside the graph. You know where they are, and today's sky: {{place}}. get_weather reads any sky; search_web reaches the live internet.
