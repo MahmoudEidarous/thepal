@@ -83,7 +83,7 @@ field rules:
 - type, exactly one:
   safety = allergies, medical constraints, sobriety — a wrong suggestion causes harm. Outranks everything.
   boundary = an explicit don't/limit the user set ("never suggest X").
-  commitment = the user promised or must do a SPECIFIC thing. Recurring bills/routines are facts. Musing ("maybe someday") is never a commitment.
+  commitment = the message IS a promise or a specific must-do, and says little else. A longer note or document that merely CONTAINS a deadline keeps its own type — the deadline goes into commitments[] instead. Recurring bills/routines are facts. Musing ("maybe someday") is never a commitment.
   taste = likes, dislikes, preferences, opinions ("I love/hate X").
   impression = a read on someone's inner state (stress, fear, mood) — not a preference, not a stated fact.
   decision = a choice the user made between options.
