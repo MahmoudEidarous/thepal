@@ -335,11 +335,20 @@ function VoiceCore({
           search_memories: ({ query }: { query: string }) =>
             track("searching memories", async () => {
               const data = await postJson("/api/recall", { q: query, limit: 6 });
+              // told-timestamps ride along so the agent can arbitrate
+              // conflicts — the latest telling is the current truth
               const hits = (data.results ?? [])
-                .map((r: { memory?: string; chunk?: string }) => r.memory ?? r.chunk)
+                .map((r: { memory?: string; chunk?: string; createdAt?: string | null }) => {
+                  const text = r.memory ?? r.chunk;
+                  if (!text) return null;
+                  const at = r.createdAt
+                    ? ` (told ${r.createdAt.slice(0, 16).replace("T", " ")})`
+                    : "";
+                  return `- ${text}${at}`;
+                })
                 .filter(Boolean);
               return hits.length
-                ? `Found ${hits.length} memories:\n${hits.map((h: string) => `- ${h}`).join("\n")}`
+                ? `Found ${hits.length} memories:\n${hits.join("\n")}`
                 : "No memories found for that.";
             }),
           get_profile: () =>

@@ -48,7 +48,14 @@ async function recall(q) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ q, limit: 6 }),
   }).then((r) => r.json());
-  return (d.results ?? []).map((r) => r.memory ?? r.chunk).filter(Boolean);
+  // same dated format the voice agent sees — one contract, one eval
+  return (d.results ?? [])
+    .map((r) => {
+      const text = r.memory ?? r.chunk;
+      if (!text) return null;
+      return r.createdAt ? `${text} (told ${r.createdAt.slice(0, 16).replace("T", " ")})` : text;
+    })
+    .filter(Boolean);
 }
 
 async function answer(q, memories) {
@@ -65,7 +72,7 @@ async function answer(q, memories) {
         {
           role: "system",
           content:
-            "You are the read side of a personal memory system. Answer the user's question in one short sentence using ONLY the memories provided. If the memories do not contain the answer, reply exactly: I don't know — you haven't told me.",
+            "You are the read side of a personal memory system. Answer the user's question in one short sentence using ONLY the memories provided. Each memory carries the timestamp when the user told it; when two memories conflict or one reverses another, the one with the LATEST timestamp is the current truth (later date wins; same date → later time wins). Never mention the timestamps themselves. If the memories do not contain the answer, reply exactly: I don't know — you haven't told me.",
         },
         {
           role: "user",
