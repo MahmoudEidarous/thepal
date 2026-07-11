@@ -192,7 +192,7 @@ function VoiceCore({
     try {
       // agenda + boundaries ride in with the session — the agent knows
       // what you owe and what it must never suggest, before you speak
-      const [res, agendaData, pinnedData] = await Promise.all([
+      const [res, agendaData, pinnedData, briefingData] = await Promise.all([
         fetch("/api/voice/signed-url"),
         fetch("/api/agenda")
           .then((r) => (r.ok ? r.json() : { commitments: [] }))
@@ -200,6 +200,9 @@ function VoiceCore({
         fetch("/api/pinned")
           .then((r) => (r.ok ? r.json() : { pinned: [] }))
           .catch(() => ({ pinned: [] })),
+        fetch("/api/briefings")
+          .then((r) => (r.ok ? r.json() : { briefings: [] }))
+          .catch(() => ({ briefings: [] })),
       ]);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "couldn't reach ElevenLabs");
@@ -228,6 +231,16 @@ function VoiceCore({
         ? (pinnedData.pinned as string[]).map((p) => `- ${p}`).join("\n")
         : "none";
 
+      // the night editor's briefing, if there's a fresh one — its Focus
+      // line becomes the agent's opening thought
+      type Briefing = { content: string; createdAt?: string };
+      const latest = ((briefingData.briefings ?? []) as Briefing[])[0];
+      const fresh =
+        latest?.createdAt &&
+        Date.now() - new Date(latest.createdAt).getTime() < 20 * 3600_000;
+      const focus = fresh ? latest.content.match(/^\s*Focus:\s*(.+?)\s*$/im)?.[1] : undefined;
+      const briefingText = fresh ? latest.content.slice(0, 1200) : "none yet";
+
       // the agent's first words — computed here, from the live ledger
       const items = agendaData.commitments as AgendaItem[];
       const urgent = items.find((c) => c.overdue || c.dueToday) ?? items.find((c) => c.due);
@@ -236,20 +249,27 @@ function VoiceCore({
       const hi = hour < 5 ? `Still up${namePart}?` : `Hey${namePart}.`;
       const dueDay = (d: string) =>
         new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { weekday: "long" });
+      const urgentLine = urgent
+        ? `${urgent.content.split(/(?<=[.!?])\s/)[0].replace(/\.$/, "")}${
+            urgent.overdue
+              ? " — that one's overdue"
+              : urgent.dueToday
+                ? " — that's today"
+                : urgent.due
+                  ? `, due ${dueDay(urgent.due)}`
+                  : ""
+          }`
+        : null;
       const opening =
         memoryCount === 0
           ? `${hi} We haven't met — I'm Recall. Whatever you tell me, I keep. So: who are you?`
-          : urgent
-            ? `${hi} Before I forget — ${urgent.content.split(/(?<=[.!?])\s/)[0].replace(/\.$/, "")}${
-                urgent.overdue
-                  ? ". That one's overdue."
-                  : urgent.dueToday
-                    ? ". That's today, by the way."
-                    : urgent.due
-                      ? `, due ${dueDay(urgent.due)}.`
-                      : "."
-              } What's on your mind?`
-            : `${hi} ${memoryCount} memories and counting. What's new?`;
+          : focus
+            ? `${hi} I went through everything while you slept. ${focus}${
+                urgentLine && urgent?.overdue ? ` And ${urgentLine}.` : ""
+              } Where do you want to start?`
+            : urgentLine
+              ? `${hi} Before I forget — ${urgentLine}. What's on your mind?`
+              : `${hi} ${memoryCount} memories and counting. What's new?`;
 
       conversation.startSession({
         signedUrl: data.signedUrl,
@@ -262,6 +282,7 @@ function VoiceCore({
           weekday: new Date().toLocaleDateString("en-US", { weekday: "long" }),
           agenda: agendaText,
           boundaries: boundariesText,
+          briefing: briefingText,
           opening,
         },
         clientTools: {

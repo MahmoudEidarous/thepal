@@ -15,5 +15,7 @@ export default defineSchedule({
    - Contradictions: if two memories disagree (moved cities, changed plans), point at the newer one and note what it replaced.
    - Impressions: treat anything that reads as a mood or inner state as tentative — "you sounded", "you seemed" — never as settled fact, and let stale ones fade rather than repeating them night after night.
 3. Compose the morning briefing (150-250 words), weighted by what actually matters: high-salience memories first, trivia not at all. Connections between recent thoughts the user may have missed, the ledger's honest state, and one suggested focus for today.
-4. Save it with add_memory using kind "briefing" and space "personal", then stop.`,
+4. End the briefing with exactly one line in this form, on its own line, nothing after it:
+   Focus: <one short spoken sentence — the single thing today should be about>
+5. Save it with add_memory using kind "briefing" and space "personal", then stop.`,
 });
