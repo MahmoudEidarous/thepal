@@ -28,12 +28,23 @@ export function NightCard() {
       fetch("/api/agenda").then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     const latest: Briefing | undefined = b?.briefings?.[0];
-    const fresh =
-      latest?.createdAt &&
-      Date.now() - new Date(latest.createdAt).getTime() < 20 * 3600_000;
-    if (latest && fresh) {
+    const age = latest?.createdAt
+      ? Date.now() - new Date(latest.createdAt).getTime()
+      : Infinity;
+    if (latest && age < 20 * 3600_000) {
       setBriefing(latest);
       setVisible(localStorage.getItem("recall-seen-briefing") !== latest.id);
+    }
+    // self-healing dream: the cron only fires while the runtime is up —
+    // a laptop asleep at 3am must not mean a morning with no briefing.
+    // If the newest briefing has gone stale, dream now (at most once
+    // per 6h, fire-and-forget).
+    if (age > 26 * 3600_000) {
+      const last = Number(localStorage.getItem("recall-autodream") ?? 0);
+      if (Date.now() - last > 6 * 3600_000) {
+        localStorage.setItem("recall-autodream", String(Date.now()));
+        void fetch("/eve/v1/dev/schedules/dream", { method: "POST" }).catch(() => {});
+      }
     }
     setUrgent(
       (((a?.commitments ?? []) as AgendaItem[]) || [])

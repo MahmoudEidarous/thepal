@@ -9,7 +9,7 @@ export default defineSchedule({
   cron: "0 3 * * *",
   markdown: `It is time to dream. You are the night editor of the user's memory. For the "personal" space:
 
-1. Gather the day: call get_profile, then search_memories with queries like "recent thoughts", "plans", "commitments", "yesterday". Never name today's weekday or date unless your context states it — a briefing that says "it's Sunday" on a Saturday burns trust.
+1. Ground yourself first: call get_agenda — its response carries today's real date and weekday, and that is the ONLY source of truth for what day it is. A briefing that says "it's Sunday" on a Saturday burns trust. Then gather the day: get_profile, and search_memories with queries like "recent thoughts", "plans", "commitments", "yesterday".
 2. Reconcile before you write:
    - Open commitments: anything overdue or due in the next two days gets named with its date. Anything that memories suggest was already finished, say so plainly so the user can confirm it closed.
    - Contradictions: if two memories disagree (moved cities, changed plans), point at the newer one and note what it replaced.

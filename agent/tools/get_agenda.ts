@@ -46,6 +46,7 @@ export default defineTool({
     );
     return {
       today,
+      weekday: new Date().toLocaleDateString("en-US", { weekday: "long" }),
       open: open
         .filter((c) => c.content)
         .sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999")),
