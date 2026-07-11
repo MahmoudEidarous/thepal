@@ -956,7 +956,8 @@ export const DEMO_CARDS: SenseCard[] = [
     id: 3,
     kind: "filed",
     status: "ready",
-    text: "Dinner with Layla at the new Syrian place on Sonnenallee next Friday at 8.",
+    amended: true,
+    text: "Dinner with Layla moved to Friday at 8 — same Syrian place on Sonnenallee.",
     envelope: {
       type: "commitment",
       due: "2026-07-17",
@@ -968,6 +969,18 @@ export const DEMO_CARDS: SenseCard[] = [
       ],
       commitments: [],
     },
+  },
+  {
+    id: 5,
+    kind: "receipts",
+    status: "ready",
+    hits: [
+      { text: "Rent for the Prenzlauer Berg flat is €1,450 warm starting September", told: "2026-07-08T18:12" },
+      { text: "Karim finally took a weekend off — first since the pilot started", told: "2026-07-06T21:04" },
+      { text: "The Hamburg NDA is signed and countersigned", told: "2026-07-02T10:41" },
+      { text: "Sofia's posting came through — Dresden, eighteen months", told: "2026-06-28T19:55" },
+      { text: "We signed our first pilot customer — a Leipzig e-commerce shop", told: "2026-07-02T09:30" },
+    ],
   },
   {
     id: 1,
