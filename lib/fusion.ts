@@ -325,10 +325,36 @@ export async function fusedRecall(opts: {
     const dated = corpus.docs
       .filter((d) => temporal.prefixes.some((p) => d.story?.startsWith(p) || d.due?.startsWith(p)))
       .filter((d) => !dueIntent || d.due)
-      .sort((a, b) => (temporal.sortDesc ? key(b).localeCompare(key(a)) : key(a).localeCompare(key(b))))
-      .slice(0, 5);
-    if (dated.length)
-      listsP.push(Promise.all(dated.map(toHit)).then((results) => ({ results, w: temporal.w })));
+      .sort((a, b) => (temporal.sortDesc ? key(b).localeCompare(key(a)) : key(a).localeCompare(key(b))));
+    // a season query earns coverage of the whole season — round-robin
+    // across its months, or five September errands starve October's
+    // wedding out of the five seats
+    let picked: Lean[];
+    if (temporal.prefixes.length > 1) {
+      const byMonth = new Map<string, Lean[]>();
+      for (const d of dated) {
+        const p = temporal.prefixes.find((x) => d.story?.startsWith(x) || d.due?.startsWith(x))!;
+        const g = byMonth.get(p) ?? [];
+        g.push(d);
+        byMonth.set(p, g);
+      }
+      picked = [];
+      for (let i = 0; picked.length < 5; i++) {
+        let added = false;
+        for (const p of temporal.prefixes) {
+          const g = byMonth.get(p);
+          if (g && i < g.length && picked.length < 5) {
+            picked.push(g[i]);
+            added = true;
+          }
+        }
+        if (!added) break;
+      }
+    } else {
+      picked = dated.slice(0, 5);
+    }
+    if (picked.length)
+      listsP.push(Promise.all(picked.map(toHit)).then((results) => ({ results, w: temporal.w })));
   }
   if (MEDICAL.test(q)) {
     const safety = corpus.docs.filter((d) => d.type === "safety").slice(0, 6);
@@ -441,6 +467,10 @@ export async function storyRecall(opts: {
       (): Corpus => ({ docs: [], aliases: new Map<string, string>() }),
     ),
   ]);
+  // the topic must actually live in this corpus — nonsense peaks near
+  // 0.57 similarity, real threads at 0.75+. No anchor, no story: better
+  // to say so than narrate eight unrelated chapters with a straight face.
+  if (!hits.some((h) => h.similarity >= 0.62)) return [];
   const byId = new Map(corpus.docs.map((d) => [d.id, d]));
   const seen = new Set<string>();
   const beats: StoryBeat[] = [];

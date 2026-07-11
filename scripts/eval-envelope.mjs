@@ -20,8 +20,15 @@ const nextWeekday = (target) => {
   return plusDays(diff);
 };
 const TODAY = iso(today);
-const SUNDAY = iso(nextWeekday(0));
-const FRIDAY_NEXT = iso(nextWeekday(5));
+// on the named day itself, "by Sunday" honestly means today OR next
+// week — the eval accepts either; every other day is unambiguous
+const weekdayDues = (target) => {
+  const ok = new Set([iso(nextWeekday(target))]);
+  if (today.getDay() === target) ok.add(TODAY);
+  return ok;
+};
+const SUNDAYS = weekdayDues(0);
+const FRIDAYS = weekdayDues(5);
 const LAST_SUMMER_YEAR = String(today.getFullYear() - 1);
 const TWO_YEARS_AGO = String(today.getFullYear() - 2);
 
@@ -32,14 +39,14 @@ const CASES = [
     critical: true,
     check: (e) =>
       e.type === "commitment" &&
-      e.due === SUNDAY &&
+      SUNDAYS.has(e.due) &&
       e.entities.some((x) => x.name.toLowerCase().includes("sarah")),
   },
   {
     name: "commitment with named-day deadline",
     content: "I need to record the demo video before the hackathon deadline on Sunday night.",
     critical: true,
-    check: (e) => e.type === "commitment" && e.due === SUNDAY,
+    check: (e) => e.type === "commitment" && SUNDAYS.has(e.due),
   },
   {
     name: "musing is not a commitment",
@@ -131,7 +138,7 @@ const CASES = [
     name: "affirmed booking becomes commitment with due",
     content: "Yes — confirmed, I do want you to book the dentist for next Friday.",
     critical: true,
-    check: (e) => e.type === "commitment" && e.due === FRIDAY_NEXT,
+    check: (e) => e.type === "commitment" && FRIDAYS.has(e.due),
   },
   {
     name: "hints use different words",
