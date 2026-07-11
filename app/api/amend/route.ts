@@ -50,9 +50,28 @@ export async function POST(request: Request) {
     const ranked = (found.results ?? [])
       .filter((r) => (r.memory ?? r.chunk) && (r.documents?.[0]?.id ?? r.id))
       .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
-    const top = ranked[0];
-    // same confidence bar as forgetting: below it, editing would guess
-    if (!top || (top.similarity ?? 0) < 0.62) {
+
+    // pick the target: best confident match that the USER actually told.
+    // The system's own bookkeeping — ledger completion events, briefings —
+    // is derived, never the object of a correction.
+    let doc: Doc | null = null;
+    let similarity = 0;
+    for (const r of ranked) {
+      // higher bar than forgetting: forget previews on screen before it
+      // acts, amend acts on its match. At 400+ docs a nonsense query can
+      // graze 0.62 (measured 0.624); real corrections sit 0.73–0.89.
+      if ((r.similarity ?? 0) < 0.7) break;
+      const candidate = (await supermemory.documents
+        .get(r.documents?.[0]?.id ?? r.id)
+        .catch(() => null)) as Doc | null;
+      if (!candidate) continue;
+      const md = (candidate.metadata ?? {}) as Record<string, unknown>;
+      if (md.source === "recall-ledger" || md.type === "briefing") continue;
+      doc = candidate;
+      similarity = r.similarity ?? 0;
+      break;
+    }
+    if (!doc) {
       return Response.json(
         {
           error: "no memory confidently matches that",
@@ -61,22 +80,21 @@ export async function POST(request: Request) {
         { status: 404 },
       );
     }
-
-    const docId = top.documents?.[0]?.id ?? top.id;
-    const doc = (await supermemory.documents.get(docId).catch(() => null)) as Doc | null;
-    if (!doc) {
-      return Response.json({ error: "matched memory's document is unreadable" }, { status: 404 });
-    }
     if (doc.status && !SETTLED.has(doc.status)) {
       // told seconds ago, still in the pipeline — the caller should file
       // the correction as a fresh telling instead (latest telling wins)
       return Response.json(
-        { busy: true, match: stripHints(doc.content ?? top.memory ?? top.chunk ?? "") },
+        { busy: true, match: stripHints(doc.content ?? "") },
         { status: 409 },
       );
     }
 
     const before = stripHints(doc.content ?? "");
+    // dryRun: which memory WOULD be rewritten — for eval harnesses and
+    // anything that wants to look before it leaps. Nothing changes.
+    if (body.dryRun === true) {
+      return Response.json({ match: before, similarity });
+    }
     const today = localToday();
     // secrets are stripped on this machine before any model sees them
     const { text: safe, redacted: preRedacted } = redactSecrets(correction);
@@ -86,7 +104,7 @@ export async function POST(request: Request) {
     const content = (envelope?.text ?? safe) + hints;
     const prev = (doc.metadata ?? {}) as Record<string, unknown>;
     const isCommitment = envelope?.type === "commitment" || prev.type === "commitment";
-    await smRequest("PATCH", `/v3/documents/${docId}`, {
+    await smRequest("PATCH", `/v3/documents/${doc.id}`, {
       content,
       metadata: {
         ...prev,
