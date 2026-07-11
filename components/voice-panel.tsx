@@ -71,6 +71,16 @@ function VoiceCore({
   // ?orb=speaking forces a visual state — QA and demo framing only.
   // Read after mount so server and client render the same first frame.
   const [forced, setForced] = useState<OrbState | null>(null);
+  // senses — where they are (IP-level, resolved silently at wake) and
+  // what the orb has looked at this session
+  const placeRef = useRef<Place | null>(null);
+  const [ambient, setAmbient] = useState<string | null>(null);
+  const [cards, setCards] = useState<SenseCard[]>([]);
+  const pushCard = (c: SenseCard) => setCards((cs) => [c, ...cs].slice(0, 3));
+  const updateCard = (id: number, patch: Partial<SenseCard>) =>
+    setCards((cs) => cs.map((c) => (c.id === id ? ({ ...c, ...patch } as SenseCard) : c)));
+  const dismissCard = (id: number) => setCards((cs) => cs.filter((c) => c.id !== id));
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const f = params.get("orb");
@@ -78,25 +88,10 @@ function VoiceCore({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time URL read after hydration
       setForced(f as OrbState);
     // ?cards=demo renders sample sense cards — design QA and demo framing
-    if (params.get("cards") === "demo")
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time URL read after hydration
-      setCards(DEMO_CARDS);
+    if (params.get("cards") === "demo") setCards(DEMO_CARDS);
   }, []);
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
-
-  // senses — where they are (IP-level, resolved silently at wake) and
-  // what the orb has looked at this session
-  const placeRef = useRef<Place | null>(null);
-  const [ambient, setAmbient] = useState<string | null>(null);
-  const [cards, setCards] = useState<SenseCard[]>([]);
-  const pushCard = useCallback((c: SenseCard) => setCards((cs) => [c, ...cs].slice(0, 3)), []);
-  const updateCard = useCallback(
-    (id: number, patch: Partial<SenseCard>) =>
-      setCards((cs) => cs.map((c) => (c.id === id ? ({ ...c, ...patch } as SenseCard) : c))),
-    [],
-  );
-  const dismissCard = useCallback((id: number) => setCards((cs) => cs.filter((c) => c.id !== id)), []);
 
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
