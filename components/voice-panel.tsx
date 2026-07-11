@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import { VoiceOrb, type OrbState } from "./voice-orb";
+import { DEMO_CARDS, SenseDock, type SenseCard, type WebSource } from "./sense-cards";
+import { fetchWeather, geocode, locate, weatherOneLiner, type Place } from "@/lib/senses";
 
 type Line = { role: "user" | "agent"; text: string };
 type Activity = { id: number; label: string };
@@ -70,13 +72,31 @@ function VoiceCore({
   // Read after mount so server and client render the same first frame.
   const [forced, setForced] = useState<OrbState | null>(null);
   useEffect(() => {
-    const f = new URLSearchParams(window.location.search).get("orb");
+    const params = new URLSearchParams(window.location.search);
+    const f = params.get("orb");
     if (f && ["idle", "connecting", "listening", "speaking", "thinking"].includes(f))
       // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time URL read after hydration
       setForced(f as OrbState);
+    // ?cards=demo renders sample sense cards — design QA and demo framing
+    if (params.get("cards") === "demo")
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time URL read after hydration
+      setCards(DEMO_CARDS);
   }, []);
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
+
+  // senses — where they are (IP-level, resolved silently at wake) and
+  // what the orb has looked at this session
+  const placeRef = useRef<Place | null>(null);
+  const [ambient, setAmbient] = useState<string | null>(null);
+  const [cards, setCards] = useState<SenseCard[]>([]);
+  const pushCard = useCallback((c: SenseCard) => setCards((cs) => [c, ...cs].slice(0, 3)), []);
+  const updateCard = useCallback(
+    (id: number, patch: Partial<SenseCard>) =>
+      setCards((cs) => cs.map((c) => (c.id === id ? ({ ...c, ...patch } as SenseCard) : c))),
+    [],
+  );
+  const dismissCard = useCallback((id: number) => setCards((cs) => cs.filter((c) => c.id !== id)), []);
 
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
@@ -191,8 +211,10 @@ function VoiceCore({
     setLines([]);
     try {
       // agenda + boundaries ride in with the session — the agent knows
-      // what you owe and what it must never suggest, before you speak
-      const [res, agendaData, pinnedData, briefingData] = await Promise.all([
+      // what you owe and what it must never suggest, before you speak.
+      // Location + today's sky resolve in the same breath, so "how's the
+      // weather?" costs zero tool calls.
+      const [res, agendaData, pinnedData, briefingData, senses] = await Promise.all([
         fetch("/api/voice/signed-url"),
         fetch("/api/agenda")
           .then((r) => (r.ok ? r.json() : { commitments: [] }))
@@ -203,6 +225,13 @@ function VoiceCore({
         fetch("/api/briefings")
           .then((r) => (r.ok ? r.json() : { briefings: [] }))
           .catch(() => ({ briefings: [] })),
+        (async () => {
+          const p = await locate();
+          if (!p) return null;
+          placeRef.current = p;
+          const w = await fetchWeather(p).catch(() => null);
+          return { p, w };
+        })().catch(() => null),
       ]);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "couldn't reach ElevenLabs");
@@ -230,6 +259,17 @@ function VoiceCore({
       const boundariesText = (pinnedData.pinned as string[]).length
         ? (pinnedData.pinned as string[]).map((p) => `- ${p}`).join("\n")
         : "none";
+
+      // where they are + today's sky, carried in the agent's pocket
+      const placeText = senses?.p
+        ? `${senses.p.city}${senses.p.region ? `, ${senses.p.region}` : ""}, ${senses.p.country}` +
+          (senses.w ? `. Sky right now — ${weatherOneLiner(senses.w)}` : "")
+        : "unknown";
+      setAmbient(
+        senses?.p
+          ? `${senses.p.city}${senses.w ? ` · ${senses.w.now.temp}° ${senses.w.now.label}` : ""}`
+          : null,
+      );
 
       // the night editor's briefing, if there's a fresh one — its Focus
       // line becomes the agent's opening thought
@@ -293,6 +333,7 @@ function VoiceCore({
           agenda: agendaText,
           boundaries: boundariesText,
           briefing: briefingText,
+          place: placeText,
           opening,
         },
         clientTools: {
@@ -402,6 +443,88 @@ function VoiceCore({
               const latest = data.briefings?.[0];
               return latest?.content ?? "No briefing yet — I haven't dreamed since we last spoke.";
             }),
+          // the senses: each look at the world conjures a card on screen
+          get_weather: ({ place }: { place?: string }) =>
+            track("reading the sky", async () => {
+              const id = ++seq.current;
+              pushCard({ id, kind: "weather", status: "loading" });
+              try {
+                const at = place?.trim()
+                  ? await geocode(place)
+                  : (placeRef.current ?? (placeRef.current = await locate()));
+                if (!at) {
+                  updateCard(id, {
+                    status: "error",
+                    error: place ? `couldn't find “${place}”` : "couldn't place you",
+                  });
+                  return place
+                    ? `No place called "${place}" found — ask them to say it differently.`
+                    : "Couldn't work out their location. Ask them where they are.";
+                }
+                const w = await fetchWeather(at);
+                updateCard(id, { status: "ready", data: w });
+                return `${weatherOneLiner(w)} The card is on screen — speak only what matters, never every number.`;
+              } catch {
+                updateCard(id, { status: "error", error: "the sky isn't answering" });
+                return "The weather service didn't answer. Say so briefly and move on.";
+              }
+            }),
+          search_web: ({
+            query,
+            freshness,
+            intent,
+          }: {
+            query: string;
+            freshness?: string;
+            intent?: string;
+          }) =>
+            track("reaching the wider world", async () => {
+              const id = ++seq.current;
+              pushCard({ id, kind: "search", status: "loading", query });
+              let data: {
+                mode: string;
+                answer?: string;
+                results?: WebSource[];
+                freshness?: string;
+                tookMs?: number;
+                error?: string;
+              };
+              try {
+                data = await postJson("/api/search", { query, freshness, intent });
+              } catch {
+                updateCard(id, { status: "error", error: "the web didn't answer" });
+                return "The search failed — the web didn't answer. Tell the user briefly and move on.";
+              }
+              if (data.mode === "clarify") {
+                dismissCard(id);
+                return "Too vague to search well. Ask the user ONE sharp narrowing question — which topic, name, or place exactly — then search again with a specific query. Do not apologize.";
+              }
+              if (data.mode === "error") {
+                updateCard(id, { status: "error", error: data.error });
+                return `Search unavailable: ${data.error} Tell the user honestly, in one short line.`;
+              }
+              const results = data.results ?? [];
+              updateCard(id, {
+                status: "ready",
+                mode: data.mode as "answer" | "wire" | "empty",
+                answer: data.answer,
+                results,
+                tookMs: data.tookMs,
+              });
+              if (data.mode === "empty" || (!results.length && !data.answer))
+                return "The web came back empty on that. Say so and offer to try different words.";
+              if (data.mode === "answer")
+                return `Live web answer (sources are on screen — never read URLs aloud):\n${data.answer}\nSources: ${results.map((s) => s.domain).join(", ")}`;
+              return (
+                `Live results${data.freshness && data.freshness !== "any" ? ` from the past ${data.freshness}` : ""}, newest first. Synthesize a short spoken take in your own voice — the screen shows the sources:\n` +
+                results
+                  .map(
+                    (s) =>
+                      `- [${s.domain}${s.published ? `, ${s.published.slice(0, 10)}` : ""}] ${s.title}${s.snippet ? ` — ${s.snippet.slice(0, 180)}` : ""}`,
+                  )
+                  .join("\n")
+              );
+            }),
         },
       });
     } catch (e) {
@@ -444,6 +567,15 @@ function VoiceCore({
           <VoiceOrb state={orbState} getLevel={getLevel} onClick={wake} size={orbSize} />
         </div>
       </div>
+
+      {/* what the orb has looked at — weather skies, live search wires */}
+      <SenseDock cards={cards} onDismiss={dismissCard} />
+      {connected && ambient && cards.length === 0 && (
+        <p className="pointer-events-none absolute right-6 top-[76px] z-20 font-mono text-[9.5px] uppercase tracking-[0.22em] text-zinc-600 max-sm:hidden">
+          <span className="mr-1.5 inline-block size-[4px] rounded-full bg-sky-300/70 align-middle" />
+          {ambient}
+        </p>
+      )}
 
       {/* status + captions live in a fixed band under the orb */}
       <div className="pointer-events-none absolute inset-x-0 top-[67%] z-20 flex flex-col items-center gap-3 px-6 text-center">
