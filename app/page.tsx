@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { VoicePanel } from "@/components/voice-panel";
 import { DreamPopover } from "@/components/dream-popover";
+import { NightCard } from "@/components/night-card";
 import { Dust, GRAIN } from "@/components/atmosphere";
 import type { MemoryEntry, ProcessingDoc } from "@/lib/memory-types";
 import { profileName } from "@/lib/format";
@@ -209,6 +210,9 @@ export default function Home() {
 
       {/* the voice — the only thing on this page */}
       <VoicePanel engine={engine} greetingName={name} memoryCount={entries.length} />
+
+      {/* the night editor's work, when there's a fresh note */}
+      <NightCard />
 
       {/* extraction heartbeat */}
       {processing.length > 0 && (
