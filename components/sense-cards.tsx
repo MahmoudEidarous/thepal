@@ -122,7 +122,7 @@ function Sky({ w }: { w: Weather }) {
       aria-hidden
     >
       {/* sun / moon */}
-      {scene === "clear" && isDay && (
+      {(scene === "clear" || scene === "partly") && isDay && (
         <>
           <div className="absolute -right-8 -top-10 size-36 rounded-full bg-[radial-gradient(circle,rgb(255_200_110/0.5),transparent_65%)]" />
           <div className="absolute right-7 top-4 size-7 rounded-full bg-amber-100/90 shadow-[0_0_28px_6px_rgb(255_210_130/0.55)]" />
