@@ -337,16 +337,19 @@ function VoiceCore({
               const data = await postJson("/api/recall", { q: query, limit: 6 });
               // told-timestamps ride along so the agent can arbitrate
               // conflicts — the latest telling is the current truth
-              const hits = (data.results ?? [])
+              const raw = (data.results ?? [])
                 .map((r: { memory?: string; chunk?: string; createdAt?: string | null }) => {
                   const text = r.memory ?? r.chunk;
-                  if (!text) return null;
-                  const at = r.createdAt
-                    ? ` (told ${r.createdAt.slice(0, 16).replace("T", " ")})`
-                    : "";
-                  return `- ${text}${at}`;
+                  return text ? { text, told: r.createdAt ?? null } : null;
                 })
-                .filter(Boolean);
+                .filter(Boolean) as Array<{ text: string; told: string | null }>;
+              // the receipts: what the answer is standing on, cited on screen
+              if (raw.length)
+                pushCard({ id: ++seq.current, kind: "receipts", status: "ready", hits: raw, ttl: 10_000 });
+              const hits = raw.map(
+                (r) =>
+                  `- ${r.text}${r.told ? ` (told ${r.told.slice(0, 16).replace("T", " ")})` : ""}`,
+              );
               return hits.length
                 ? `Found ${hits.length} memories:\n${hits.join("\n")}`
                 : "No memories found for that.";
@@ -361,21 +364,56 @@ function VoiceCore({
               return `Stable facts:\n${stat.join("\n")}\n\nRight now:\n${dyn.join("\n")}`;
             }),
           // fire-and-forget: the agent never waits on the enricher. The
-          // chip shows the save; a failure comes back as a contextual
-          // update so the agent can own it honestly.
+          // filing card shows what the envelope stamped — write path made
+          // visible — and a failure comes back as a contextual update so
+          // the agent can own it honestly.
           add_memory: ({ content, kind, due }: { content: string; kind?: string; due?: string }) => {
             const id = ++seq.current;
             setActivity((a) => [...a, { id, label: "remembering" }]);
+            pushCard({ id, kind: "filed", status: "loading", text: content, ttl: 8_000 });
             void postJson("/api/capture", {
               content,
               kind: kind ?? "memory",
               due,
               source: "recall-voice",
             })
-              .catch((e) => {
+              .then((d) => {
+                const e = d.envelope as
+                  | {
+                      text?: string;
+                      type?: string;
+                      due?: string | null;
+                      storyDate?: string | null;
+                      salience?: number;
+                      entities?: Array<{ name: string; kind?: string }>;
+                      commitments?: Array<{ content: string; due: string | null }>;
+                    }
+                  | undefined;
+                if (!e) {
+                  updateCard(id, { status: "error" });
+                  return;
+                }
+                updateCard(id, {
+                  status: "ready",
+                  text: e.text ?? content,
+                  envelope: {
+                    type: e.type ?? "memory",
+                    due: e.due ?? null,
+                    storyDate: e.storyDate ?? null,
+                    salience: e.salience ?? 0.5,
+                    entities: (e.entities ?? []).map((en) => ({
+                      name: en.name,
+                      kind: en.kind ?? "thing",
+                    })),
+                    commitments: e.commitments ?? [],
+                  },
+                });
+              })
+              .catch((err) => {
+                updateCard(id, { status: "error" });
                 try {
                   conversation.sendContextualUpdate(
-                    `That last save actually failed (${e instanceof Error ? e.message : "engine error"}). Tell the user their memory didn't stick and offer to try again.`,
+                    `That last save actually failed (${err instanceof Error ? err.message : "engine error"}). Tell the user their memory didn't stick and offer to try again.`,
                   );
                 } catch {}
               })

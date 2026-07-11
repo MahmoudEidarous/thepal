@@ -6,7 +6,7 @@
 // world with its receipts attached. Desktop: a dock below the header,
 // top right. Mobile: newest card only, docked above the controls.
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { Weather } from "@/lib/senses";
 
 export type WebSource = {
@@ -18,8 +18,20 @@ export type WebSource = {
   snippet: string | null;
 };
 
+// what the write envelope stamped on a capture — shown, then gone
+export type FiledEnvelope = {
+  type: string;
+  due: string | null;
+  storyDate: string | null;
+  salience: number;
+  entities: Array<{ name: string; kind: string }>;
+  commitments: Array<{ content: string; due: string | null }>;
+};
+
+export type Receipt = { text: string; told: string | null };
+
 export type SenseCard =
-  | { id: number; kind: "weather"; status: "loading" | "ready" | "error"; data?: Weather; error?: string }
+  | { id: number; kind: "weather"; status: "loading" | "ready" | "error"; data?: Weather; error?: string; ttl?: number }
   | {
       id: number;
       kind: "search";
@@ -30,7 +42,18 @@ export type SenseCard =
       results?: WebSource[];
       tookMs?: number;
       error?: string;
-    };
+      ttl?: number;
+    }
+  | {
+      id: number;
+      kind: "filed";
+      status: "loading" | "ready" | "error";
+      text: string;
+      envelope?: FiledEnvelope;
+      error?: string;
+      ttl?: number;
+    }
+  | { id: number; kind: "receipts"; status: "ready"; hits: Receipt[]; ttl?: number };
 
 function ago(iso: string | null) {
   if (!iso) return null;
@@ -505,7 +528,229 @@ function SearchBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "sea
   );
 }
 
+/* ── the pipeline, visible ───────────────────────────────────────── */
+
+// same palette the brain page gives each memory type
+const TYPE_TONES: Record<string, string> = {
+  fact: "#6C9BF0",
+  event: "#62B7E6",
+  taste: "#EF7FB4",
+  decision: "#52C79A",
+  commitment: "#F2B03D",
+  boundary: "#E9805E",
+  safety: "#F05252",
+  impression: "#A78BFA",
+  memory: "#8B96B3",
+};
+
+function KindGlyph({ kind }: { kind: string }) {
+  const common = {
+    width: 9,
+    height: 9,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2.2,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  if (kind === "person")
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4.5 20.5c1.5-3.5 4.2-5 7.5-5s6 1.5 7.5 5" />
+      </svg>
+    );
+  if (kind === "place")
+    return (
+      <svg {...common}>
+        <path d="M12 21s-7-6.1-7-11a7 7 0 0 1 14 0c0 4.9-7 11-7 11Z" />
+        <circle cx="12" cy="10" r="2.4" />
+      </svg>
+    );
+  if (kind === "thread")
+    return (
+      <svg {...common}>
+        <path d="M4 17c4-1 5-8 9-9 3.2-.8 6 1 7 4" />
+        <circle cx="4.5" cy="17.5" r="1.6" />
+      </svg>
+    );
+  return (
+    <svg {...common}>
+      <rect x="5" y="5" width="14" height="14" rx="3" />
+    </svg>
+  );
+}
+
+const shortDue = (d: string) =>
+  new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+function FiledBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "filed" }>; onDismiss: () => void }) {
+  if (card.status === "loading")
+    return (
+      <div className="p-4">
+        <div className="flex items-center gap-2">
+          <span className="size-[5px] animate-hint rounded-full bg-indigo-300/90 shadow-[0_0_8px_1px_rgb(165_180_252/0.5)]" />
+          <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-500">filing</span>
+          <span className="ml-auto">
+            <Dismiss onClick={onDismiss} />
+          </span>
+        </div>
+        <p className="mt-2.5 line-clamp-2 text-[12.5px] leading-relaxed text-zinc-400">{card.text}</p>
+        <div className="mt-2.5">
+          <Shimmer w="w-1/2" />
+        </div>
+      </div>
+    );
+  if (card.status === "error" || !card.envelope)
+    return (
+      <div className="p-4">
+        <div className="flex items-center justify-between">
+          <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-500">kept raw</span>
+          <Dismiss onClick={onDismiss} />
+        </div>
+        <p className="mt-2 line-clamp-2 text-[12.5px] text-zinc-300">{card.text}</p>
+        <p className="mt-1.5 text-[11px] text-amber-400/80">the words are safe — enrichment will catch up</p>
+      </div>
+    );
+  const e = card.envelope;
+  const tone = TYPE_TONES[e.type] ?? TYPE_TONES.memory;
+  const bright = e.salience >= 0.7;
+  return (
+    <>
+      <div className="flex items-center gap-2 px-4 pt-3">
+        <span
+          className="size-[5px] rounded-full"
+          style={{
+            background: tone,
+            boxShadow: bright ? `0 0 9px 2px ${tone}88` : `0 0 5px 0 ${tone}44`,
+            opacity: bright ? 1 : 0.75,
+          }}
+        />
+        <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-500">
+          filed · {e.type}
+        </span>
+        <span className="ml-auto font-mono text-[9.5px] tabular-nums tracking-[0.14em] text-zinc-600">
+          {e.storyDate ?? null}
+        </span>
+        <Dismiss onClick={onDismiss} />
+      </div>
+      <p className="mt-2 line-clamp-3 px-4 text-[12.5px] leading-relaxed text-zinc-200">{card.text}</p>
+      {(e.due || e.entities.length > 0) && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5 px-4">
+          {e.due && (
+            <span className="flex items-center gap-1 rounded-full bg-amber-300/[0.09] py-[3px] pl-2 pr-2.5 font-mono text-[9.5px] tracking-[0.08em] text-amber-200/90 ring-1 ring-inset ring-amber-300/[0.18] tabular-nums">
+              due {shortDue(e.due)}
+            </span>
+          )}
+          {e.entities.slice(0, 4).map((en, i) => (
+            <span
+              key={i}
+              className="flex items-center gap-1.5 rounded-full bg-white/[0.05] py-[3px] pl-2 pr-2.5 font-mono text-[9.5px] tracking-[0.06em] text-zinc-400 ring-1 ring-inset ring-white/[0.08]"
+            >
+              <KindGlyph kind={en.kind} />
+              {en.name}
+            </span>
+          ))}
+        </div>
+      )}
+      {e.commitments.length > 0 && (
+        <p className="mt-2 px-4 font-mono text-[9.5px] uppercase tracking-[0.18em] text-amber-200/70">
+          +{e.commitments.length} commitment{e.commitments.length > 1 ? "s" : ""} → ledger
+        </p>
+      )}
+      <div className="pb-3.5" />
+    </>
+  );
+}
+
+function ReceiptsBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "receipts" }>; onDismiss: () => void }) {
+  const shown = card.hits.slice(0, 4);
+  return (
+    <>
+      <div className="flex items-center gap-2 px-4 pt-3">
+        <span className="size-[5px] rounded-full bg-zinc-400/70" />
+        <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-500">
+          drew on {card.hits.length} {card.hits.length === 1 ? "memory" : "memories"}
+        </span>
+        <span className="ml-auto">
+          <Dismiss onClick={onDismiss} />
+        </span>
+      </div>
+      <div className="mt-1.5 flex flex-col divide-y divide-white/[0.04] pb-2.5">
+        {shown.map((h, i) => (
+          <div key={i} className="flex items-baseline gap-3 px-4 py-[7px]">
+            <p className="min-w-0 flex-1 truncate text-[11.5px] leading-relaxed text-zinc-500">{h.text}</p>
+            {h.told && (
+              <span className="shrink-0 font-mono text-[9px] tracking-[0.08em] text-zinc-700 tabular-nums">
+                {h.told.slice(0, 10)}
+              </span>
+            )}
+          </div>
+        ))}
+        {card.hits.length > shown.length && (
+          <p className="px-4 pt-1.5 font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-700">
+            and {card.hits.length - shown.length} more
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
 /* ── the dock ────────────────────────────────────────────────────── */
+
+// Ephemeral cards (filed, receipts) carry a ttl and dissolve on their
+// own once they're done loading; a pointer resting on the card holds it.
+function DockItem({
+  card,
+  leaving,
+  dismiss,
+}: {
+  card: SenseCard;
+  leaving: boolean;
+  dismiss: () => void;
+}) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settled = card.status !== "loading";
+
+  useEffect(() => {
+    if (!card.ttl || !settled) return;
+    timer.current = setTimeout(dismiss, card.ttl);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card.ttl, settled]);
+
+  const hold = () => {
+    if (timer.current) clearTimeout(timer.current);
+  };
+  const release = () => {
+    if (card.ttl && settled) timer.current = setTimeout(dismiss, 2_500);
+  };
+
+  return (
+    <div
+      onMouseEnter={hold}
+      onMouseLeave={release}
+      className={`glass group pointer-events-auto overflow-hidden rounded-3xl ${
+        leaving ? "card-out" : "card-in"
+      }`}
+    >
+      {card.kind === "weather" ? (
+        <WeatherBody card={card} onDismiss={dismiss} />
+      ) : card.kind === "search" ? (
+        <SearchBody card={card} onDismiss={dismiss} />
+      ) : card.kind === "filed" ? (
+        <FiledBody card={card} onDismiss={dismiss} />
+      ) : (
+        <ReceiptsBody card={card} onDismiss={dismiss} />
+      )}
+    </div>
+  );
+}
 
 export function SenseDock({ cards, onDismiss }: { cards: SenseCard[]; onDismiss: (id: number) => void }) {
   // dismissal dissolves the card before it leaves the tree
@@ -522,18 +767,7 @@ export function SenseDock({ cards, onDismiss }: { cards: SenseCard[]; onDismiss:
   return (
     <div className="pointer-events-none absolute right-5 top-[72px] z-40 flex w-[344px] max-w-[calc(100vw-2.5rem)] flex-col gap-3 max-sm:inset-x-3 max-sm:bottom-24 max-sm:top-auto max-sm:w-auto max-sm:[&>*:not(:first-child)]:hidden">
       {cards.map((c) => (
-        <div
-          key={c.id}
-          className={`glass group pointer-events-auto overflow-hidden rounded-3xl ${
-            leaving.includes(c.id) ? "card-out" : "card-in"
-          }`}
-        >
-          {c.kind === "weather" ? (
-            <WeatherBody card={c} onDismiss={() => dismiss(c.id)} />
-          ) : (
-            <SearchBody card={c} onDismiss={() => dismiss(c.id)} />
-          )}
-        </div>
+        <DockItem key={c.id} card={c} leaving={leaving.includes(c.id)} dismiss={() => dismiss(c.id)} />
       ))}
     </div>
   );
@@ -541,6 +775,23 @@ export function SenseDock({ cards, onDismiss }: { cards: SenseCard[]; onDismiss:
 
 // ?cards=demo — design QA and demo-video framing without a live session
 export const DEMO_CARDS: SenseCard[] = [
+  {
+    id: 3,
+    kind: "filed",
+    status: "ready",
+    text: "Dinner with Layla at the new Syrian place on Sonnenallee next Friday at 8.",
+    envelope: {
+      type: "commitment",
+      due: "2026-07-17",
+      storyDate: null,
+      salience: 0.72,
+      entities: [
+        { name: "Layla", kind: "person" },
+        { name: "Sonnenallee", kind: "place" },
+      ],
+      commitments: [],
+    },
+  },
   {
     id: 1,
     kind: "search",
