@@ -30,6 +30,15 @@ export type FiledEnvelope = {
 
 export type Receipt = { text: string; told: string | null };
 
+// six weeks of the envelope's valence × intensity stamps, read back
+export type MoodData = {
+  days: Array<{ date: string; v: number; a: number; n: number }>;
+  drift: "up" | "down" | "steady";
+  brightest: { date: string; label: string; why: string } | null;
+  roughest: { date: string; label: string; why: string } | null;
+  spoken: string;
+};
+
 export type SenseCard =
   | { id: number; kind: "weather"; status: "loading" | "ready" | "error"; data?: Weather; error?: string; ttl?: number }
   | {
@@ -50,10 +59,20 @@ export type SenseCard =
       status: "loading" | "ready" | "error";
       text: string;
       envelope?: FiledEnvelope;
+      // a correction rewrote an existing memory instead of adding one
+      amended?: boolean;
       error?: string;
       ttl?: number;
     }
-  | { id: number; kind: "receipts"; status: "ready"; hits: Receipt[]; ttl?: number };
+  | { id: number; kind: "receipts"; status: "ready"; hits: Receipt[]; ttl?: number }
+  | {
+      id: number;
+      kind: "mood";
+      status: "loading" | "ready" | "error";
+      data?: MoodData;
+      error?: string;
+      ttl?: number;
+    };
 
 function ago(iso: string | null) {
   if (!iso) return null;
@@ -592,7 +611,9 @@ function FiledBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "file
       <div className="p-4">
         <div className="flex items-center gap-2">
           <span className="size-[5px] animate-hint rounded-full bg-indigo-300/90 shadow-[0_0_8px_1px_rgb(165_180_252/0.5)]" />
-          <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-500">filing</span>
+          <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-500">
+            {card.amended ? "amending" : "filing"}
+          </span>
           <span className="ml-auto">
             <Dismiss onClick={onDismiss} />
           </span>
@@ -629,7 +650,7 @@ function FiledBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "file
           }}
         />
         <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-500">
-          filed · {e.type}
+          {card.amended ? "amended" : "filed"} · {e.type}
         </span>
         <span className="ml-auto font-mono text-[9.5px] tabular-nums tracking-[0.14em] text-zinc-600">
           {e.storyDate ?? null}
@@ -699,6 +720,121 @@ function ReceiptsBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "r
   );
 }
 
+// The inner seismograph: one bar per day, up and warm when the day
+// lifted, down and ember when it weighed. Quiet days stay a tick on the
+// baseline — silence is real data.
+function MoodBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "mood" }>; onDismiss: () => void }) {
+  const driftWord =
+    card.data?.drift === "up" ? "brightening" : card.data?.drift === "down" ? "dimming" : "steady";
+  if (card.status === "loading")
+    return (
+      <div className="p-4">
+        <div className="flex items-center gap-2">
+          <span className="size-[5px] animate-hint rounded-full bg-violet-300/90 shadow-[0_0_8px_1px_rgb(196_181_253/0.5)]" />
+          <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-500">
+            inner weather
+          </span>
+          <span className="ml-auto">
+            <Dismiss onClick={onDismiss} />
+          </span>
+        </div>
+        <div className="mt-3 flex flex-col gap-2">
+          <Shimmer w="w-full" />
+          <Shimmer w="w-2/3" />
+        </div>
+      </div>
+    );
+  if (card.status === "error" || !card.data)
+    return (
+      <div className="p-4">
+        <div className="flex items-center justify-between">
+          <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-500">
+            inner weather
+          </span>
+          <Dismiss onClick={onDismiss} />
+        </div>
+        <p className="mt-2 text-[12px] text-zinc-400">{card.error ?? "the needle isn't answering"}</p>
+      </div>
+    );
+  const m = card.data;
+  const W = 312;
+  const MID = 40;
+  const n = m.days.length;
+  const step = (W - 10) / Math.max(n - 1, 1);
+  const peaks = new Set([m.brightest?.date, m.roughest?.date].filter(Boolean) as string[]);
+  return (
+    <>
+      <Eyebrow
+        label="inner weather"
+        tone="bg-violet-300/90 shadow-[0_0_8px_1px_rgb(196_181_253/0.5)]"
+        right={driftWord}
+        onDismiss={onDismiss}
+      />
+      <div className="mx-4 mt-1.5">
+        <svg viewBox={`0 0 ${W} 80`} className="block w-full" aria-hidden>
+          <line x1="0" y1={MID} x2={W} y2={MID} stroke="rgb(255 255 255 / 0.08)" strokeWidth="1" />
+          {m.days.map((d, i) => {
+            const x = 5 + i * step;
+            if (!d.n || d.a === 0)
+              return <circle key={d.date} cx={x} cy={MID} r="0.9" fill="rgb(255 255 255 / 0.14)" />;
+            const mag = Math.max(3, d.a * (0.3 + 0.7 * Math.abs(d.v)) * 34);
+            const up = d.v >= 0;
+            const tone = up ? "#F2B03D" : "#E9805E";
+            const peak = peaks.has(d.date);
+            return (
+              <g key={d.date}>
+                {peak && (
+                  <circle cx={x} cy={up ? MID - mag : MID + mag} r="4.5" fill={tone} opacity="0.16" />
+                )}
+                <rect
+                  x={x - 1}
+                  y={up ? MID - mag : MID}
+                  width="2"
+                  height={mag}
+                  rx="1"
+                  fill={tone}
+                  opacity={peak ? 0.95 : 0.38 + 0.5 * Math.abs(d.v)}
+                />
+              </g>
+            );
+          })}
+        </svg>
+        <div className="flex justify-between font-mono text-[8.5px] uppercase tracking-[0.18em] text-zinc-700">
+          <span>six weeks ago</span>
+          <span>today</span>
+        </div>
+      </div>
+      {(m.brightest || m.roughest) && (
+        <div className="mt-2 flex flex-col divide-y divide-white/[0.04] pb-3">
+          {m.brightest && (
+            <div className="flex items-baseline gap-2 px-4 py-[6px]">
+              <span className="size-[5px] shrink-0 translate-y-[-1px] rounded-full bg-[#F2B03D] shadow-[0_0_6px_0_rgb(242_176_61/0.5)]" />
+              <span className="shrink-0 font-mono text-[9px] tracking-[0.08em] text-zinc-600 tabular-nums">
+                {m.brightest.label}
+              </span>
+              <p className="min-w-0 flex-1 truncate text-[11px] leading-relaxed text-zinc-500">
+                {m.brightest.why}
+              </p>
+            </div>
+          )}
+          {m.roughest && (
+            <div className="flex items-baseline gap-2 px-4 py-[6px]">
+              <span className="size-[5px] shrink-0 translate-y-[-1px] rounded-full bg-[#E9805E] shadow-[0_0_6px_0_rgb(233_128_94/0.5)]" />
+              <span className="shrink-0 font-mono text-[9px] tracking-[0.08em] text-zinc-600 tabular-nums">
+                {m.roughest.label}
+              </span>
+              <p className="min-w-0 flex-1 truncate text-[11px] leading-relaxed text-zinc-500">
+                {m.roughest.why}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+      {!m.brightest && !m.roughest && <div className="pb-3" />}
+    </>
+  );
+}
+
 /* ── the dock ────────────────────────────────────────────────────── */
 
 // Ephemeral cards (filed, receipts) carry a ttl and dissolve on their
@@ -745,6 +881,8 @@ function DockItem({
         <SearchBody card={card} onDismiss={dismiss} />
       ) : card.kind === "filed" ? (
         <FiledBody card={card} onDismiss={dismiss} />
+      ) : card.kind === "mood" ? (
+        <MoodBody card={card} onDismiss={dismiss} />
       ) : (
         <ReceiptsBody card={card} onDismiss={dismiss} />
       )}
@@ -773,8 +911,47 @@ export function SenseDock({ cards, onDismiss }: { cards: SenseCard[]; onDismiss:
   );
 }
 
+// a designed six-week trace for the demo card: quiet stretches, one
+// heavy dip, a bright run into today
+const DEMO_TRACE = [
+  0, 0, 0.3, 0, 0, -0.2, 0, 0.5, 0, 0, 0.4, 0, 0, 0, -0.6, 0, 0.2, 0, 0, 0, 0.3, 0, -0.4, 0, 0,
+  0.6, 0, 0, 0.2, 0, 0, -0.75, 0, 0.3, 0, 0.5, 0, 0.45, -0.2, 0, 0.6, 0.5,
+];
+const demoMood = (): MoodData => {
+  const days = DEMO_TRACE.map((v, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (DEMO_TRACE.length - 1 - i));
+    return {
+      date: d.toLocaleDateString("en-CA"),
+      v,
+      a: v === 0 ? 0 : 0.45 + Math.abs(v) * 0.55,
+      n: v === 0 ? 0 : 1,
+    };
+  });
+  const human = (iso: string) =>
+    new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+  const bright = days[25];
+  const rough = days[31];
+  return {
+    days,
+    drift: "up",
+    brightest: {
+      date: bright.date,
+      label: human(bright.date),
+      why: "We signed our first pilot customer — an e-commerce shop out of Leipzig.",
+    },
+    roughest: {
+      date: rough.date,
+      label: human(rough.date),
+      why: "Mom sounded tired on Sunday's call.",
+    },
+    spoken: "Mostly bright these six weeks. This week is trending brighter.",
+  };
+};
+
 // ?cards=demo — design QA and demo-video framing without a live session
 export const DEMO_CARDS: SenseCard[] = [
+  { id: 4, kind: "mood", status: "ready", data: demoMood() },
   {
     id: 3,
     kind: "filed",

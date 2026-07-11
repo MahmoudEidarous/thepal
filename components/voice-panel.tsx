@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import { VoiceOrb, type OrbState } from "./voice-orb";
-import { DEMO_CARDS, SenseDock, type SenseCard, type WebSource } from "./sense-cards";
+import { DEMO_CARDS, SenseDock, type MoodData, type SenseCard, type WebSource } from "./sense-cards";
 import { DEMO_STORY, StoryOverlay, type StoryBeat, type StoryState } from "./story-mode";
 import { fetchWeather, geocode, locate, weatherOneLiner, type Place } from "@/lib/senses";
 
@@ -16,6 +16,26 @@ type PendingForget = {
 };
 
 type Engine = "online" | "offline" | "checking";
+
+// what /api/capture and /api/amend hand back for the filed card
+type EnvelopePayload = {
+  text?: string;
+  type?: string;
+  due?: string | null;
+  storyDate?: string | null;
+  salience?: number;
+  entities?: Array<{ name: string; kind?: string }>;
+  commitments?: Array<{ content: string; due: string | null }>;
+};
+
+const toFiled = (e: EnvelopePayload) => ({
+  type: e.type ?? "memory",
+  due: e.due ?? null,
+  storyDate: e.storyDate ?? null,
+  salience: e.salience ?? 0.5,
+  entities: (e.entities ?? []).map((en) => ({ name: en.name, kind: en.kind ?? "thing" })),
+  commitments: e.commitments ?? [],
+});
 
 async function postJson(path: string, body: unknown) {
   const res = await fetch(path, {
@@ -360,6 +380,9 @@ function VoiceCore({
         dynamicVariables: {
           today: new Date().toLocaleDateString("en-CA"),
           weekday: new Date().toLocaleDateString("en-US", { weekday: "long" }),
+          // sessions cap at 15 minutes, so a start-of-session clock is
+          // never more than 15 minutes stale — good enough to feel the hour
+          now: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
           agenda: agendaText,
           boundaries: boundariesText,
           briefing: briefingText,
@@ -413,36 +436,12 @@ function VoiceCore({
               source: "recall-voice",
             })
               .then((d) => {
-                const e = d.envelope as
-                  | {
-                      text?: string;
-                      type?: string;
-                      due?: string | null;
-                      storyDate?: string | null;
-                      salience?: number;
-                      entities?: Array<{ name: string; kind?: string }>;
-                      commitments?: Array<{ content: string; due: string | null }>;
-                    }
-                  | undefined;
+                const e = d.envelope as EnvelopePayload | undefined;
                 if (!e) {
                   updateCard(id, { status: "error" });
                   return;
                 }
-                updateCard(id, {
-                  status: "ready",
-                  text: e.text ?? content,
-                  envelope: {
-                    type: e.type ?? "memory",
-                    due: e.due ?? null,
-                    storyDate: e.storyDate ?? null,
-                    salience: e.salience ?? 0.5,
-                    entities: (e.entities ?? []).map((en) => ({
-                      name: en.name,
-                      kind: en.kind ?? "thing",
-                    })),
-                    commitments: e.commitments ?? [],
-                  },
-                });
+                updateCard(id, { status: "ready", text: e.text ?? content, envelope: toFiled(e) });
               })
               .catch((err) => {
                 updateCard(id, { status: "error" });
@@ -513,6 +512,57 @@ function VoiceCore({
                   : "No open commitments to close.";
               return `Closed: ${data.completed}. It stays in the ledger as done.`;
             }),
+          // a correction rewrites the memory in place — the doc keeps its
+          // place in history but stops saying the wrong thing. Synchronous:
+          // the agent needs before/after to react honestly.
+          edit_memory: ({ about, correction }: { about: string; correction: string }) =>
+            track("amending a memory", async () => {
+              const id = ++seq.current;
+              pushCard({ id, kind: "filed", status: "loading", text: correction, amended: true, ttl: 8_000 });
+              let res: Response;
+              let data: {
+                before?: string;
+                after?: string;
+                match?: string;
+                candidates?: string[];
+                error?: string;
+                envelope?: EnvelopePayload;
+              };
+              try {
+                res = await fetch("/api/amend", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ query: about, correction }),
+                });
+                data = await res.json().catch(() => ({}));
+              } catch {
+                updateCard(id, { status: "error" });
+                return "The amend failed — the engine didn't answer. Say so briefly and move on.";
+              }
+              if (res.status === 409) {
+                dismissCard(id);
+                return `That memory is seconds old and still filing — it can't be rewritten yet. Save the corrected version with add_memory instead (the newest telling wins): "${correction}"`;
+              }
+              if (res.status === 404) {
+                dismissCard(id);
+                return data.candidates?.length
+                  ? `No memory matches confidently enough to edit. Closest:\n${data.candidates
+                      .map((c) => `- ${c}`)
+                      .join("\n")}\nAsk which one they mean, then call edit_memory again with more specific words.`
+                  : "No memory matches that. If they told you it moments ago it may still be filing — save the corrected version with add_memory (newest telling wins). Otherwise ask what exactly should change.";
+              }
+              if (!res.ok) {
+                updateCard(id, { status: "error" });
+                return `The amend failed (${data.error ?? "engine error"}). Say so briefly.`;
+              }
+              const e = data.envelope;
+              updateCard(id, {
+                status: "ready",
+                text: e?.text ?? data.after ?? correction,
+                envelope: e ? toFiled(e) : undefined,
+              });
+              return `Amended. It said: "${data.before}" — it now says: "${data.after}". React to the change in one short line; never recite both versions.`;
+            }),
           get_briefing: () =>
             track("fetching briefing", async () => {
               const res = await fetch("/api/briefings");
@@ -551,6 +601,48 @@ function VoiceCore({
               return `Chapter ${next + 1} of ${s.beats.length} — ${b.date}${
                 b.dated ? "" : " (timing approximate — dated by when they told you)"
               }: ${b.text}`;
+            }),
+          // a web finding worth keeping becomes a memory that speaks its
+          // own provenance — ask again tomorrow and it cites the source
+          save_finding: ({ finding, source }: { finding: string; source?: string }) => {
+            const id = ++seq.current;
+            setActivity((a) => [...a, { id, label: "keeping a finding" }]);
+            pushCard({ id, kind: "filed", status: "loading", text: finding, ttl: 8_000 });
+            const today = new Date().toLocaleDateString("en-CA");
+            const content = `${finding} (learned from ${source?.trim() || "a web search"}, ${today})`;
+            void postJson("/api/capture", { content, kind: "memory", source: "recall-web" })
+              .then((d) => {
+                const e = d.envelope as EnvelopePayload | undefined;
+                if (!e) {
+                  updateCard(id, { status: "error" });
+                  return;
+                }
+                updateCard(id, { status: "ready", text: e.text ?? finding, envelope: toFiled(e) });
+              })
+              .catch(() => updateCard(id, { status: "error" }))
+              .finally(() => setActivity((a) => a.filter((x) => x.id !== id)));
+            return "Kept, with its source. Don't announce it — keep the conversation moving.";
+          },
+          // the inner weather: six weeks of the envelope's emotional
+          // stamps, drawn as a seismograph — no model in the loop
+          get_emotional_weather: () =>
+            track("reading the inner sky", async () => {
+              const id = ++seq.current;
+              pushCard({ id, kind: "mood", status: "loading" });
+              try {
+                const res = await fetch("/api/mood");
+                if (!res.ok) throw new Error();
+                const data = (await res.json()) as MoodData;
+                updateCard(id, { status: "ready", data });
+                return `${data.spoken}${
+                  data.brightest ? `\nBrightest day: ${data.brightest.label} — ${data.brightest.why}` : ""
+                }${
+                  data.roughest ? `\nRoughest day: ${data.roughest.label} — ${data.roughest.why}` : ""
+                }\nThe seismograph is on screen. Give the read in one or two spoken lines, your voice — name what made the peaks if it lands. Never recite numbers or dates mechanically.`;
+              } catch {
+                updateCard(id, { status: "error", error: "the needle isn't answering" });
+                return "The inner-weather read failed. Say so in one short line.";
+              }
             }),
           // the senses: each look at the world conjures a card on screen
           get_weather: ({ place }: { place?: string }) =>

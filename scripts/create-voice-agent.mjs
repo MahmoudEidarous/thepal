@@ -87,6 +87,28 @@ const TOOLS = [
     ),
   },
   {
+    name: "edit_memory",
+    description:
+      "Rewrite ONE existing memory when the user corrects it — 'actually it's Friday, not Thursday', 'her name is Lena, not Lina', 'the rent is 1450 now'. Pass what to find and the full corrected statement. Only for corrections to something already saved; brand-new information is add_memory. The tool answers with before/after — react in one line, never recite both versions.",
+    expects_response: true,
+    response_timeout_secs: 30,
+    parameters: params(
+      {
+        about: {
+          type: "string",
+          description:
+            "Words that find the memory being corrected — names and topics, never pronouns.",
+        },
+        correction: {
+          type: "string",
+          description:
+            "The corrected memory as ONE complete standalone statement, as if told fresh — not just the changed word.",
+        },
+      },
+      ["about", "correction"],
+    ),
+  },
+  {
     name: "preview_forget",
     description:
       "Dry-run preview of forgetting: returns which memories WOULD be deleted for a topic. Never deletes. Always call this first and tell the user what would go.",
@@ -112,6 +134,14 @@ const TOOLS = [
     description:
       "Fetch the latest morning briefing written by the nightly dream. Use when the user asks for their briefing, their morning update, or what they missed.",
     expects_response: true,
+    parameters: params({}, []),
+  },
+  {
+    name: "get_emotional_weather",
+    description:
+      "How the user's last six weeks FELT — an inner-weather seismograph appears on screen: which days lifted, which weighed, drawn from the emotional stamp every memory carries. Use when they ask how they've been, what their mood's been like, how the month went, or during a reflective beat. Speak the read in one or two lines and name what made the peaks; the card holds the detail.",
+    expects_response: true,
+    response_timeout_secs: 15,
     parameters: params({}, []),
   },
   {
@@ -153,6 +183,26 @@ const TOOLS = [
       "Light the next chapter of the open story. Returns exactly one chapter's date and text — narrate that in one or two spoken sentences, then call again for the next. The final call tells you the story is done.",
     expects_response: true,
     parameters: params({}, []),
+  },
+  {
+    name: "save_finding",
+    description:
+      "After a web search lands, keep ONE finding as a memory — only when it settles something about THEIR life or plans: a price they're weighing, a date that moves their schedule, the fact they asked you to check. Never headlines, scores, or passing curiosity. Pass the finding as one standalone statement plus the source domain. Silent, like every save.",
+    expects_response: true,
+    parameters: params(
+      {
+        finding: {
+          type: "string",
+          description:
+            "The finding as one complete standalone statement in the user's world — names and numbers spelled out.",
+        },
+        source: {
+          type: "string",
+          description: "Domain it came from, e.g. bahn.de or reuters.com",
+        },
+      },
+      ["finding", "source"],
+    ),
   },
   {
     name: "search_web",
@@ -218,8 +268,10 @@ You're not sealed inside the graph. You know where they are, and today's sky: {{
 - Before searching, drop a tiny beat out loud — "hang on—", "let me look" — so the room never goes dead. When it lands, give the takeaway in one or two sentences, your voice, your read. The card on screen carries the sources; never read out URLs, dates-and-domains, or lists.
 - Time matters: freshness "day" for today/right-now, "week" for latest/recently, intent "news" for headlines, releases, scores.
 - Vague asks — "what's the news?", "look something up" — don't search. Ask one sharp narrowing question instead: "News about what — AI, football, Berlin?"
+- When a search settles something that touches THEIR plans — the visa fee they asked about, the train time that moves their Tuesday, the venue's closing day — keep it: save_finding, with the source. Asked-once-answered-forever is the product. Headlines, scores, curiosity of the moment: let them pass. The save is silent, as always.
 - Thin or empty results: say so plainly and ask what exactly they're after. Never pad a weak result into a confident answer.
 - Weather for right-now is already in your pocket; get_weather is for forecasts, other places, or when they want detail. Tie it to their life when it's true — rain plus a runner means something.
+- There's an inner sky too: get_emotional_weather charts how their last weeks FELT, from the weight their own memories carry. When they ask how they've been — or the conversation turns reflective — call it, then speak the read like a friend would: "mostly bright, one rough patch around the 5th — that call with your mom." Never recite the chart.
 
 # Story mode — tours of the mind
 When they ask for the story of something — "take me through…", "tell me the story of…", "how did X happen" — call show_story with the topic, then advance_story. Narrate ONLY the chapter each call returns: a breath or two in your voice, dates the way a human says them ("that February", "early July"), then advance again. Never summarize ahead, never read timestamps or IDs. The half-second before each chapter is good cinema — let it sit. If the stage says there isn't enough story, offer to just talk about it. If they interrupt or the overlay closes, the tour is over — stop advancing.
@@ -236,6 +288,9 @@ If they ask what they missed or what the briefing says, speak from this — shor
 # Boundaries — absolute. Never violate them, never make the user repeat them
 {{boundaries}}
 
+# Corrections
+When they fix something you know — a date moved, a name misheard, a number changed — call edit_memory with the find-words and the FULL corrected statement. The memory is rewritten in place; the screen shows the amended card. React to the change itself ("Friday it is"), never announce the edit, never read both versions back. If the tool says the memory is too fresh to edit, just save the correction as new — newest telling wins anyway.
+
 # Forgetting
 Always two steps: preview_forget, say out loud what would go, then execute_forget only on a clear yes — an on-screen approval pops. Denied? Drop it gracefully.
 
@@ -243,7 +298,7 @@ Always two steps: preview_forget, say out loud what would go, then execute_forge
 If get_profile comes back basically empty: be curious, not formal. Their name, what they're building, what actually matters right now, any hard limits. Save as you go — silently.
 
 # Context
-Today is {{today}} ({{weekday}}).`;
+Today is {{today}} ({{weekday}}); the clock read {{now}} when this session opened. Resolve "tonight", "tomorrow", "in an hour" against that — never guess the date or hour from anything else. You feel the hour without announcing it: morning gets energy, late night gets quiet; a 2am session earns one raised eyebrow ("still up?"), never a lecture. Say the time only if they ask.`;
 
 // first_message is fully computed client-side (greeting + what's due)
 // and injected as a dynamic variable at session start.
