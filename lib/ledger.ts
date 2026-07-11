@@ -18,9 +18,11 @@ export function stripHints(text: string): string {
 }
 
 async function listDocs(tag: string): Promise<Doc[]> {
+  // high ceiling: at exactly N docs the oldest ones silently fall off —
+  // which once dropped the first-ever completed commitment from history
   const docs = await supermemory.documents.list({
     containerTags: [tag],
-    limit: 100,
+    limit: 500,
     sort: "createdAt",
     order: "desc",
   });
