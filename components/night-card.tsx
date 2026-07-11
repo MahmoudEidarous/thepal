@@ -96,10 +96,10 @@ export function NightCard() {
         >
           <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
         </svg>
-        <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-indigo-200/80">
+        <span className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-indigo-200/80">
           while you slept
         </span>
-        <span className="font-mono text-[10px] text-zinc-600">
+        <span className="font-mono text-[9.5px] tabular-nums text-zinc-600">
           {briefing.createdAt ? timeAgo(briefing.createdAt) : ""}
         </span>
         <button
@@ -124,14 +124,14 @@ export function NightCard() {
       </p>
       <button
         onClick={() => setExpanded((e) => !e)}
-        className="mt-1 text-[11px] text-zinc-600 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-300"
+        className="mt-1.5 font-mono text-[9.5px] uppercase tracking-[0.2em] text-zinc-500 transition-colors hover:text-zinc-300"
       >
         {expanded ? "less" : "the whole note"}
       </button>
 
       {urgent.length > 0 && (
         <div className="mt-4 flex flex-col gap-1.5 border-t border-white/[0.07] pt-3">
-          <p className="font-mono text-[9.5px] uppercase tracking-[0.24em] text-zinc-600">
+          <p className="font-mono text-[9.5px] uppercase tracking-[0.26em] text-zinc-600">
             needs a decision
           </p>
           {urgent.map((c) => (

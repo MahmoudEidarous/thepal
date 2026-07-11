@@ -691,7 +691,8 @@ function VoiceCore({
       {pending && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-md">
           <div className="glass animate-rise w-full max-w-md rounded-3xl p-7 text-left">
-            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-red-400">
+            <p className="flex items-center gap-2 font-mono text-[9.5px] uppercase tracking-[0.26em] text-red-400">
+              <span className="size-[5px] animate-hint rounded-full bg-red-400 shadow-[0_0_8px_1px_rgb(248_113_113/0.5)]" />
               approval required
             </p>
             <p className="mt-3 text-[17px] font-semibold tracking-tight text-white">
