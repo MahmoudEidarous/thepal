@@ -115,7 +115,7 @@ function VoiceCore({
       }, 2_600);
       return () => clearInterval(t);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
@@ -189,7 +189,7 @@ function VoiceCore({
   useEffect(() => {
     if (wasConnected.current && !connected) setStory(null);
     wasConnected.current = connected;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [connected]);
 
   // the agent sees what you're looking at: clicking a star mid-session
