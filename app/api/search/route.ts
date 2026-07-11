@@ -157,10 +157,19 @@ export async function POST(req: Request) {
       });
     }
 
-    // answer mode: grounded prose with citations, one call
+    // answer mode: grounded prose with citations, one call. The [1][2]
+    // markers link to citations the card already shows — spoken aloud
+    // they're noise, so they go.
     const data = await exa("/answer", key, { query, text: false });
     const sources = dedupe(((data.citations ?? []) as ExaResult[]).map(toSource), 5);
-    const answer = typeof data.answer === "string" ? data.answer.trim() : "";
+    const answer =
+      typeof data.answer === "string"
+        ? data.answer
+            .replace(/\[\d+(?:,\s*\d+)*\]/g, "")
+            .replace(/\s+([.,;:!?])/g, "$1")
+            .replace(/ {2,}/g, " ")
+            .trim()
+        : "";
     if (!answer && !sources.length)
       return NextResponse.json({ mode: "empty", query, results: [], tookMs: Date.now() - started });
     return NextResponse.json({
