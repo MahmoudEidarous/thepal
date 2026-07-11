@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import { VoiceOrb, type OrbState } from "./voice-orb";
 import { DEMO_CARDS, SenseDock, type SenseCard, type WebSource } from "./sense-cards";
+import { DEMO_STORY, StoryOverlay, type StoryBeat, type StoryState } from "./story-mode";
 import { fetchWeather, geocode, locate, weatherOneLiner, type Place } from "@/lib/senses";
 
 type Line = { role: "user" | "agent"; text: string };
@@ -81,6 +82,16 @@ function VoiceCore({
     setCards((cs) => cs.map((c) => (c.id === id ? ({ ...c, ...patch } as SenseCard) : c)));
   const dismissCard = (id: number) => setCards((cs) => cs.filter((c) => c.id !== id));
 
+  // story mode — the overlay and the voice share one script. The ref is
+  // what the client tools read (their closures outlive renders); the
+  // state is what the screen renders.
+  const storyRef = useRef<StoryState | null>(null);
+  const [storyView, setStoryView] = useState<StoryState | null>(null);
+  const setStory = (s: StoryState | null) => {
+    storyRef.current = s;
+    setStoryView(s);
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const f = params.get("orb");
@@ -89,6 +100,22 @@ function VoiceCore({
       setForced(f as OrbState);
     // ?cards=demo renders sample sense cards — design QA and demo framing
     if (params.get("cards") === "demo") setCards(DEMO_CARDS);
+    // ?story=demo runs the story overlay on rails — no engine, no session
+    if (params.get("story") === "demo") {
+      setStory(DEMO_STORY);
+      const t = setInterval(() => {
+        const s = storyRef.current;
+        if (!s) return clearInterval(t);
+        if (s.active + 1 >= s.beats.length) {
+          setStory({ ...s, done: true });
+          clearInterval(t);
+        } else {
+          setStory({ ...s, active: s.active + 1 });
+        }
+      }, 2_600);
+      return () => clearInterval(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
@@ -156,6 +183,14 @@ function VoiceCore({
   useEffect(() => {
     isSpeakingRef.current = isSpeaking;
   }, [isSpeaking]);
+
+  // a story doesn't outlive its narrator — clear it when the session ends
+  const wasConnected = useRef(false);
+  useEffect(() => {
+    if (wasConnected.current && !connected) setStory(null);
+    wasConnected.current = connected;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
 
   // the agent sees what you're looking at: clicking a star mid-session
   // tells it, so "what about this one?" just works
@@ -485,6 +520,38 @@ function VoiceCore({
               const latest = data.briefings?.[0];
               return latest?.content ?? "No briefing yet — I haven't dreamed since we last spoke.";
             }),
+          // story mode — the voice and the constellation share one script.
+          // advance_story returns exactly ONE chapter per call, so the
+          // agent structurally cannot read ahead of the screen.
+          show_story: ({ topic }: { topic: string }) =>
+            track("setting the stage", async () => {
+              const data = await postJson("/api/story", { topic });
+              const beats = (data.beats ?? []) as StoryBeat[];
+              if (beats.length < 2)
+                return `Only ${beats.length} usable ${beats.length === 1 ? "memory" : "memories"} on that — not enough for a tour. Say so in one warm line and offer to just talk about it instead.`;
+              setStory({ topic, beats, active: -1, done: false });
+              return `The stage is lit: ${beats.length} chapters, ${beats[0].date} to ${
+                beats[beats.length - 1].date
+              }. Call advance_story to open chapter one. Narrate ONLY what each call returns — one or two spoken sentences, dates said like a human — then advance again. Stop if the user interrupts.`;
+            }),
+          advance_story: () =>
+            track("next chapter", async () => {
+              const s = storyRef.current;
+              if (!s) return "No story is open — call show_story first.";
+              const next = s.active + 1;
+              if (next >= s.beats.length) {
+                setStory({ ...s, done: true });
+                setTimeout(() => {
+                  if (storyRef.current?.done) setStory(null);
+                }, 7_000);
+                return "That was the last chapter — the whole path is lit. Close with ONE line about the arc, then move on.";
+              }
+              setStory({ ...s, active: next });
+              const b = s.beats[next];
+              return `Chapter ${next + 1} of ${s.beats.length} — ${b.date}${
+                b.dated ? "" : " (timing approximate — dated by when they told you)"
+              }: ${b.text}`;
+            }),
           // the senses: each look at the world conjures a card on screen
           get_weather: ({ place }: { place?: string }) =>
             track("reading the sky", async () => {
@@ -612,6 +679,21 @@ function VoiceCore({
 
       {/* what the orb has looked at — weather skies, live search wires */}
       <SenseDock cards={cards} onDismiss={dismissCard} />
+
+      {/* story mode — the constellation performs while the voice narrates */}
+      {storyView && (
+        <StoryOverlay
+          story={storyView}
+          onClose={() => {
+            setStory(null);
+            try {
+              conversation.sendContextualUpdate(
+                "The user closed the story overlay. End the tour now — no more advance_story calls; just continue the conversation naturally.",
+              );
+            } catch {}
+          }}
+        />
+      )}
       {connected && ambient && cards.length === 0 && (
         <p className="pointer-events-none absolute right-6 top-[76px] z-20 font-mono text-[9.5px] uppercase tracking-[0.22em] text-zinc-600 max-sm:hidden">
           <span className="mr-1.5 inline-block size-[4px] rounded-full bg-sky-300/70 align-middle" />

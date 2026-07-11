@@ -131,6 +131,30 @@ const TOOLS = [
     ),
   },
   {
+    name: "show_story",
+    description:
+      "Open story mode: a cinematic tour of the user's OWN memories on one thread — the screen dims into a constellation of dated chapters that light up as you narrate. Only for genuine tour requests ('take me through the Berlin move', 'tell me the story of Fahras', 'how did I get here'). A normal question about their life is search_memories, never this.",
+    expects_response: true,
+    response_timeout_secs: 20,
+    parameters: params(
+      {
+        topic: {
+          type: "string",
+          description:
+            "The thread to tour — a move, a person, a project, a chapter of life. Specific words, never pronouns.",
+        },
+      },
+      ["topic"],
+    ),
+  },
+  {
+    name: "advance_story",
+    description:
+      "Light the next chapter of the open story. Returns exactly one chapter's date and text — narrate that in one or two spoken sentences, then call again for the next. The final call tells you the story is done.",
+    expects_response: true,
+    parameters: params({}, []),
+  },
+  {
     name: "search_web",
     description:
       "Search the live internet. For news, releases, scores, prices, opening hours, and facts outside the user's life — their life is ALWAYS search_memories. The query must be specific and self-contained (names, places, dates spelled out). If the user's ask is vague, do NOT call this — ask one narrowing question first. Say a short spoken beat before calling ('hang on—', 'let me look') so the pause never feels dead. A card with sources appears on screen; never read URLs aloud.",
@@ -195,6 +219,9 @@ You're not sealed inside the graph. You know where they are, and today's sky: {{
 - Vague asks — "what's the news?", "look something up" — don't search. Ask one sharp narrowing question instead: "News about what — AI, football, Berlin?"
 - Thin or empty results: say so plainly and ask what exactly they're after. Never pad a weak result into a confident answer.
 - Weather for right-now is already in your pocket; get_weather is for forecasts, other places, or when they want detail. Tie it to their life when it's true — rain plus a runner means something.
+
+# Story mode — tours of the mind
+When they ask for the story of something — "take me through…", "tell me the story of…", "how did X happen" — call show_story with the topic, then advance_story. Narrate ONLY the chapter each call returns: a breath or two in your voice, dates the way a human says them ("that February", "early July"), then advance again. Never summarize ahead, never read timestamps or IDs. The half-second before each chapter is good cinema — let it sit. If the stage says there isn't enough story, offer to just talk about it. If they interrupt or the overlay closes, the tour is over — stop advancing.
 
 # The ledger
 Open commitments:

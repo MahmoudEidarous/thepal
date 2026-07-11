@@ -44,6 +44,7 @@ type Lean = {
   story: string | null;
   due: string | null;
   type: string | null;
+  entities: string | null;
 };
 
 type Corpus = { docs: Lean[]; aliases: Map<string, string> };
@@ -94,6 +95,7 @@ async function getCorpus(space: Space): Promise<Corpus> {
       story: str(m.storyDate),
       due: str(m.due),
       type: str(m.type),
+      entities: str(m.entities),
     });
     // "Layla/my sister#person, Kasr Al Ainy hospital/Kasr Al Ainy#place"
     const raw = str(m.entities);
@@ -409,4 +411,76 @@ export async function fusedRecall(opts: {
     createdAt,
     similarity,
   }));
+}
+
+// ── story mode ─────────────────────────────────────────────────────
+// A tour through one thread of the user's life. The fused read path
+// picks the chapters; story-dates put them in the order they were
+// LIVED, not the order they were told. Coarse dates (YYYY, YYYY-MM)
+// sort naturally as strings.
+
+export type StoryBeat = {
+  text: string;
+  date: string; // YYYY[-MM[-DD]] — storyDate when the envelope found one
+  dated: boolean; // true when anchored by a real story-date
+  told: string | null;
+  type: string;
+  entities: Array<{ name: string; kind: string }>;
+};
+
+export async function storyRecall(opts: {
+  q: string;
+  space: Space;
+  limit?: number;
+}): Promise<StoryBeat[]> {
+  const limit = opts.limit ?? 8;
+  // a wide pool — the chapters worth telling are often not the top hits
+  const [hits, corpus] = await Promise.all([
+    fusedRecall({ q: opts.q, space: opts.space, limit: Math.max(limit * 2 + 4, 20) }),
+    getCorpus(opts.space).catch(
+      (): Corpus => ({ docs: [], aliases: new Map<string, string>() }),
+    ),
+  ]);
+  const byId = new Map(corpus.docs.map((d) => [d.id, d]));
+  const seen = new Set<string>();
+  const beats: StoryBeat[] = [];
+  for (const h of hits) {
+    if (seen.has(h.documentId)) continue;
+    seen.add(h.documentId);
+    const doc = byId.get(h.documentId);
+    const story = doc?.story ?? null;
+    const date = story ?? h.createdAt?.slice(0, 10) ?? null;
+    if (!date) continue;
+    const entities: Array<{ name: string; kind: string }> = [];
+    for (const part of (doc?.entities ?? "").split(",")) {
+      const [names, kind] = part.trim().split("#");
+      const name = names?.split("/")[0]?.trim();
+      if (name) entities.push({ name, kind: kind?.trim() || "thing" });
+    }
+    beats.push({
+      text: h.memory,
+      date,
+      dated: !!story,
+      told: h.createdAt,
+      type: doc?.type ?? "memory",
+      entities: entities.slice(0, 3),
+    });
+  }
+  // story-dated beats are the narrative spine, but only a nudge ahead —
+  // a dated stray must not outrank a strong on-topic hit. Then a near-dup
+  // pass: two tellings of the same race make one chapter, not two.
+  const scored = beats
+    .map((b, rank) => ({ b, key: rank - (b.dated ? 6 : 0) }))
+    .sort((x, y) => x.key - y.key)
+    .map((x) => x.b);
+  // TWIN-level dedup on purpose: fusedRecall keeps retellings so truth
+  // arbitration can compare them — a tour wants one chapter per happening
+  const kept: StoryBeat[] = [];
+  for (const b of scored) {
+    if (kept.some((k) => jaccard(words(k.text), words(b.text)) > TWIN)) continue;
+    kept.push(b);
+    if (kept.length >= limit) break;
+  }
+  kept.sort((a, b) => a.date.localeCompare(b.date));
+  return kept;
 }

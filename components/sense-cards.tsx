@@ -531,7 +531,7 @@ function SearchBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "sea
 /* ── the pipeline, visible ───────────────────────────────────────── */
 
 // same palette the brain page gives each memory type
-const TYPE_TONES: Record<string, string> = {
+export const TYPE_TONES: Record<string, string> = {
   fact: "#6C9BF0",
   event: "#62B7E6",
   taste: "#EF7FB4",
