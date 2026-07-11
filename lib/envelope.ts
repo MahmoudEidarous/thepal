@@ -28,7 +28,15 @@ export const EnvelopeSchema = z.object({
   valence: z.number().min(-1).max(1),
   intensity: z.number().min(0).max(1),
   salience: z.number().min(0).max(1),
-  entities: z.array(z.object({ name: z.string(), aliases: z.array(z.string()) })).max(6),
+  entities: z
+    .array(
+      z.object({
+        name: z.string(),
+        aliases: z.array(z.string()),
+        kind: z.enum(["person", "place", "thread", "thing"]),
+      }),
+    )
+    .max(6),
   hints: z.array(z.string()).min(1).max(3),
   redacted: z.boolean(),
   // promises/deadlines found INSIDE a longer message — each becomes its
@@ -86,7 +94,7 @@ field rules:
 - due: commitments only — resolve relative dates against today using the weekday given ("by Sunday" = the next Sunday). null otherwise.
 - valence −1..1, intensity 0..1: what the moment cost or meant emotionally.
 - salience 0..1: identity, relationships, health, hard deadlines high; trivia low.
-- entities: people/places/projects, alternate spellings as aliases of one entity.
+- entities: who and what this is about; alternate spellings as aliases of one entity. kind: person (a human) · place (city, neighborhood, venue, country) · thread (an ongoing storyline — a move, a pilot, an application, a course) · thing (org, product, object, team).
 - hints: 1-3 rephrasings or questions this memory answers, using DIFFERENT words than the original.
 - commitments: promises or hard deadlines buried INSIDE a longer message (notes, documents), each as a standalone statement with its due date resolved. Empty when there are none — or when the whole message is itself the commitment (then use type=commitment instead).`;
 

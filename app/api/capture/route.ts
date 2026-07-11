@@ -53,10 +53,12 @@ export async function POST(request: Request) {
         redacted: envelope?.redacted || preRedacted,
         ...(envelope?.hints?.length ? { hints: envelope.hints.join(" · ") } : {}),
         ...(envelope?.storyDate ? { storyDate: envelope.storyDate } : {}),
+        // "Name/alias#kind, Name2#kind" — the kind suffix makes the brain's
+        // people/places/threads shelves possible without ever re-reading
         ...(envelope?.entities?.length
           ? {
               entities: envelope.entities
-                .map((e) => [e.name, ...e.aliases].join("/"))
+                .map((e) => `${[e.name, ...e.aliases].join("/")}#${e.kind ?? "thing"}`)
                 .join(", "),
             }
           : {}),

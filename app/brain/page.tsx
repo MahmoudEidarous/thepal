@@ -238,6 +238,7 @@ export default function Brain() {
   const [capQ, setCapQ] = useState("");
   const [personQ, setPersonQ] = useState("");
   const [personSel, setPersonSel] = useState<string | null>(null);
+  const [lens, setLens] = useState<"told" | "lived">("told");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [closing, setClosing] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
@@ -384,23 +385,57 @@ export default function Brain() {
           String(c.meta.entities ?? "").toLowerCase().includes(needle)),
     );
     const out: Array<{ day: string; items: Capture[] }> = [];
-    shown.forEach((c) => {
-      const label = c.createdAt ? dayLabel(c.createdAt, today) : "earlier";
+    const push = (label: string, c: Capture) => {
       const last = out[out.length - 1];
       if (last && last.day === label) last.items.push(c);
       else out.push({ day: label, items: [c] });
-    });
+    };
+    if (lens === "lived") {
+      // when it HAPPENED — the story-date the envelope wrote, not the
+      // day you said it. The same memories, rearranged into a life.
+      const storyKey = (c: Capture) =>
+        typeof c.meta.storyDate === "string"
+          ? (c.meta.storyDate as string)
+          : c.createdAt
+            ? new Date(c.createdAt).toLocaleDateString("en-CA")
+            : "";
+      const thisYear = today.slice(0, 4);
+      const label = (sd: string) => {
+        const y = sd.slice(0, 4);
+        if (y !== thisYear) return y || "undated";
+        const m = Number(sd.slice(5, 7));
+        return m
+          ? new Date(Number(y), m - 1, 1).toLocaleDateString("en-US", {
+              month: "long",
+              year: "numeric",
+            })
+          : y;
+      };
+      shown
+        .slice()
+        .sort((a, b) => storyKey(b).localeCompare(storyKey(a)))
+        .forEach((c) => push(label(storyKey(c)), c));
+      return out;
+    }
+    shown.forEach((c) => push(c.createdAt ? dayLabel(c.createdAt, today) : "earlier", c));
     return out;
-  }, [captures, typeFilter, capQ, today]);
+  }, [captures, typeFilter, capQ, today, lens]);
 
   const openCount = ledger?.open.length ?? 0;
   const lateCount = ledger?.open.filter((c) => c.due && c.due < today).length ?? 0;
 
   // ── people & places — the envelope tags entities on every write ──
   const people = useMemo(() => {
-    type Ent = { name: string; aliases: Set<string>; items: Capture[]; types: Map<string, number> };
+    type Ent = {
+      name: string;
+      aliases: Set<string>;
+      items: Capture[];
+      types: Map<string, number>;
+      kinds: Map<string, number>;
+    };
     const map = new Map<string, Ent>();
-    const addTo = (e: Ent, c: Capture) => {
+    const addTo = (e: Ent, c: Capture, kind: string) => {
+      e.kinds.set(kind, (e.kinds.get(kind) ?? 0) + 1);
       if (e.items.includes(c)) return;
       e.items.push(c);
       const t = String(c.meta.type ?? "memory");
@@ -409,14 +444,24 @@ export default function Brain() {
     for (const c of captures ?? []) {
       if (typeof c.meta.entities !== "string") continue;
       for (const raw of (c.meta.entities as string).split(", ")) {
-        const parts = raw.split("/").map((s) => s.trim()).filter(Boolean);
+        const [namesPart, kindPart] = raw.split("#");
+        const kind = ["person", "place", "thread", "thing"].includes(kindPart)
+          ? kindPart
+          : "thing";
+        const parts = (namesPart ?? "").split("/").map((s) => s.trim()).filter(Boolean);
         if (!parts[0]) continue;
         const key = parts[0].toLowerCase();
         const e =
           map.get(key) ??
-          ({ name: parts[0], aliases: new Set<string>(), items: [], types: new Map() } as Ent);
+          ({
+            name: parts[0],
+            aliases: new Set<string>(),
+            items: [],
+            types: new Map(),
+            kinds: new Map(),
+          } as Ent);
         parts.slice(1).forEach((a) => e.aliases.add(a));
-        addTo(e, c);
+        addTo(e, c, kind);
         map.set(key, e);
       }
     }
@@ -425,7 +470,9 @@ export default function Brain() {
       for (const a of e.aliases) {
         const dupe = map.get(a.toLowerCase());
         if (dupe && dupe !== e) {
-          dupe.items.forEach((c) => addTo(e, c));
+          dupe.items.forEach((c) =>
+            addTo(e, c, [...dupe.kinds.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? "thing"),
+          );
           dupe.aliases.forEach((x) => e.aliases.add(x));
           map.delete(a.toLowerCase());
         }
@@ -437,6 +484,7 @@ export default function Brain() {
         aliases: [...e.aliases].filter((a) => a.toLowerCase() !== e.name.toLowerCase()),
         items: e.items.slice().sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
         types: [...e.types.entries()].sort((a, b) => b[1] - a[1]),
+        kind: [...e.kinds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "thing",
       }))
       .sort((a, b) => b.items.length - a.items.length);
   }, [captures]);
@@ -742,48 +790,65 @@ export default function Brain() {
                     className="glass-chip h-9 w-48 rounded-full px-4 text-[13px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                  {people
-                    .filter(
-                      (p) =>
-                        !personQ.trim() ||
+                {(
+                  [
+                    ["person", "people"],
+                    ["place", "places"],
+                    ["thread", "threads — stories in motion"],
+                    ["thing", "everything else"],
+                  ] as const
+                ).map(([kind, title]) => {
+                  const group = people.filter(
+                    (p) =>
+                      p.kind === kind &&
+                      (!personQ.trim() ||
                         [p.name, ...p.aliases]
                           .join(" ")
                           .toLowerCase()
-                          .includes(personQ.trim().toLowerCase()),
-                    )
-                    .map((p) => (
-                      <button
-                        key={p.name}
-                        onClick={() => setPersonSel(p.name)}
-                        className="rounded-2xl border border-white/[0.08] bg-white/[0.035] px-4 py-3.5 text-left transition-all hover:border-white/20 hover:bg-white/[0.06]"
-                      >
-                        <p className="truncate text-[14.5px] font-medium text-zinc-100">
-                          {p.name}
-                        </p>
-                        {p.aliases.length > 0 && (
-                          <p className="truncate text-[11px] text-zinc-600">
-                            also {p.aliases.join(", ")}
-                          </p>
-                        )}
-                        <p className="mt-1.5 flex items-center gap-2">
-                          <span className="font-mono text-[10px] text-zinc-500">
-                            {p.items.length} memor{p.items.length === 1 ? "y" : "ies"}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            {p.types.slice(0, 4).map(([t]) => (
-                              <span
-                                key={t}
-                                title={t}
-                                className="size-[6px] rounded-full"
-                                style={{ background: TYPE_COLORS[t] ?? TYPE_COLORS.memory }}
-                              />
-                            ))}
-                          </span>
-                        </p>
-                      </button>
-                    ))}
-                </div>
+                          .includes(personQ.trim().toLowerCase())),
+                  );
+                  if (!group.length) return null;
+                  return (
+                    <section key={kind}>
+                      <h2 className="mb-2.5 flex items-baseline gap-2 font-mono text-[10.5px] uppercase tracking-[0.25em] text-zinc-500">
+                        {title} <span className="text-zinc-600">{group.length}</span>
+                      </h2>
+                      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                        {group.map((p) => (
+                          <button
+                            key={p.name}
+                            onClick={() => setPersonSel(p.name)}
+                            className="rounded-2xl border border-white/[0.08] bg-white/[0.035] px-4 py-3.5 text-left transition-all hover:border-white/20 hover:bg-white/[0.06]"
+                          >
+                            <p className="truncate text-[14.5px] font-medium text-zinc-100">
+                              {p.name}
+                            </p>
+                            {p.aliases.length > 0 && (
+                              <p className="truncate text-[11px] text-zinc-600">
+                                also {p.aliases.join(", ")}
+                              </p>
+                            )}
+                            <p className="mt-1.5 flex items-center gap-2">
+                              <span className="font-mono text-[10px] text-zinc-500">
+                                {p.items.length} memor{p.items.length === 1 ? "y" : "ies"}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                {p.types.slice(0, 4).map(([t]) => (
+                                  <span
+                                    key={t}
+                                    title={t}
+                                    className="size-[6px] rounded-full"
+                                    style={{ background: TYPE_COLORS[t] ?? TYPE_COLORS.memory }}
+                                  />
+                                ))}
+                              </span>
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  );
+                })}
               </>
             ) : (
               <>
@@ -1005,12 +1070,35 @@ export default function Brain() {
                   Everything you&apos;ve told me, with the envelope it was written in.
                 </p>
               </div>
-              <input
-                value={capQ}
-                onChange={(e) => setCapQ(e.target.value)}
-                placeholder="search captures"
-                className="glass-chip h-9 w-52 rounded-full px-4 text-[13px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25"
-              />
+              <div className="flex items-center gap-2.5">
+                <div className="glass-chip flex items-center rounded-full p-0.5">
+                  {(
+                    [
+                      ["told", "as told"],
+                      ["lived", "as lived"],
+                    ] as const
+                  ).map(([k, t]) => (
+                    <button
+                      key={k}
+                      onClick={() => setLens(k)}
+                      className={
+                        "rounded-full px-3 py-1.5 text-[11.5px] font-medium transition-all " +
+                        (lens === k
+                          ? "bg-white/10 text-zinc-100"
+                          : "text-zinc-500 hover:text-zinc-200")
+                      }
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  value={capQ}
+                  onChange={(e) => setCapQ(e.target.value)}
+                  placeholder="search captures"
+                  className="glass-chip h-9 w-44 rounded-full px-4 text-[13px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25"
+                />
+              </div>
             </div>
 
             {captures && captures.length > 0 && (
@@ -1074,7 +1162,7 @@ export default function Brain() {
                         typeof c.meta.entities === "string"
                           ? (c.meta.entities as string)
                               .split(", ")
-                              .map((e) => e.split("/")[0])
+                              .map((e) => e.split("#")[0].split("/")[0])
                               .filter(Boolean)
                           : [];
                       const metaBits: string[] = [];
