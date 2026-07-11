@@ -1,4 +1,4 @@
-import { spaceTag, supermemory, type Space } from "@/lib/supermemory";
+import { spaceTag, supermemory, type Space } from "./supermemory";
 
 // Vague-query fusion + truth arbitration for /api/recall.
 //
