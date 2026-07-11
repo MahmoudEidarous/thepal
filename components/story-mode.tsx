@@ -57,6 +57,7 @@ function positions(beats: StoryBeat[]) {
 export function StoryOverlay({ story, onClose }: { story: StoryState; onClose: () => void }) {
   const { beats, active, done, topic } = story;
   const pos = useMemo(() => positions(beats), [beats]);
+  if (!beats.length) return null;
   const litThrough = done ? beats.length - 1 : active;
   const focus = pos[Math.max(0, Math.min(litThrough, pos.length - 1))];
   const beat = active >= 0 && active < beats.length ? beats[active] : null;
@@ -143,9 +144,10 @@ export function StoryOverlay({ story, onClose }: { story: StoryState; onClose: (
                   }}
                 />
               </div>
+              {/* on a phone eight labels collide — only the active one speaks */}
               <p
                 className={`absolute left-1/2 top-[14px] -translate-x-1/2 whitespace-nowrap font-mono text-[9px] tracking-[0.14em] transition-colors duration-700 tabular-nums ${
-                  isActive ? "text-zinc-200" : lit ? "text-zinc-500" : "text-zinc-700"
+                  isActive ? "text-zinc-200" : lit ? "text-zinc-500 max-sm:opacity-0" : "text-zinc-700 max-sm:opacity-0"
                 }`}
               >
                 {prettyDate(b.date)}
@@ -155,8 +157,9 @@ export function StoryOverlay({ story, onClose }: { story: StoryState; onClose: (
         })}
       </div>
 
-      {/* the lower third — the words of the current chapter */}
-      <div className="absolute inset-x-0 bottom-[9dvh] flex justify-center px-6">
+      {/* the lower third — the words of the current chapter. Sits clear
+          of the session controls, which stay reachable above the dim. */}
+      <div className="absolute inset-x-0 bottom-[max(9dvh,7.5rem)] flex justify-center px-6">
         {beat && !done && (
           <div key={active} className="glass card-in w-full max-w-xl rounded-3xl px-6 py-5">
             <div className="flex items-center gap-2">

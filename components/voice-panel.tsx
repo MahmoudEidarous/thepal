@@ -769,9 +769,10 @@ function VoiceCore({
         </p>
       )}
 
-      {/* liquid-glass controls */}
+      {/* liquid-glass controls — above the story dim, so mute/type/end
+          stay in reach while the constellation performs */}
       {connected && (
-        <div className="absolute inset-x-0 bottom-8 z-30 flex items-center justify-center gap-3.5">
+        <div className="absolute inset-x-0 bottom-8 z-[46] flex items-center justify-center gap-3.5">
           <button
             onClick={() => conversation.setMuted(!conversation.isMuted)}
             aria-label={conversation.isMuted ? "Unmute microphone" : "Mute microphone"}
