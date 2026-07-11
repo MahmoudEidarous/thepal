@@ -46,6 +46,20 @@ export function NightCard() {
         void fetch("/eve/v1/dev/schedules/dream", { method: "POST" }).catch(() => {});
       }
     }
+    // self-healing glance, same disease, same cure: its cron (10:30,
+    // 16:30) never fires in dev. Once per window per day; the glance
+    // itself decides whether anything deserves a notification, and the
+    // windows already respect the no-mornings boundary.
+    const now = new Date();
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const win = mins >= 16 * 60 + 30 ? "pm" : mins >= 10 * 60 + 30 ? "am" : null;
+    if (win) {
+      const key = `${now.toLocaleDateString("en-CA")}-${win}`;
+      if (localStorage.getItem("recall-autoglance") !== key) {
+        localStorage.setItem("recall-autoglance", key);
+        void fetch("/eve/v1/dev/schedules/glance", { method: "POST" }).catch(() => {});
+      }
+    }
     setUrgent(
       (((a?.commitments ?? []) as AgendaItem[]) || [])
         .filter((c) => c.overdue || c.dueToday)
