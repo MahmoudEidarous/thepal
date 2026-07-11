@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Dust, GRAIN } from "@/components/atmosphere";
-import { timeAgo } from "@/lib/format";
+import { profileName, timeAgo } from "@/lib/format";
 import type { MemoryEntry } from "@/lib/memory-types";
 
 type View = "graph" | "ledger" | "captures";
@@ -229,7 +229,7 @@ export default function Brain() {
   const [selected, setSelected] = useState<Node | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const [name, setName] = useState<string>("YOU");
+  const [profileLines, setProfileLines] = useState<string[]>([]);
   const [box, setBox] = useState({ w: 1280, h: 800 });
   const [ledger, setLedger] = useState<{ open: LedgerItem[]; done: LedgerItem[] } | null>(null);
   const [captures, setCaptures] = useState<Capture[] | null>(null);
@@ -295,13 +295,18 @@ export default function Brain() {
     fetch("/api/profile")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        const m = [...(d?.profile?.static ?? []), ...(d?.profile?.dynamic ?? [])]
-          .join(" ")
-          .match(/(?:user'?s?|my) name is (\w+)/i);
-        if (m) setName(m[1].toUpperCase());
+         
+        setProfileLines([...(d?.profile?.static ?? []), ...(d?.profile?.dynamic ?? [])]);
       })
       .catch(() => {});
   }, []);
+
+  const name = useMemo(
+    () =>
+      profileName([...profileLines, ...(captures ?? []).map((c) => c.text)])?.toUpperCase() ??
+      "YOU",
+    [profileLines, captures],
+  );
 
   async function completeItem(id: string) {
     setClosing(id);

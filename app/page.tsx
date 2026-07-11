@@ -6,6 +6,7 @@ import { VoicePanel } from "@/components/voice-panel";
 import { DreamPopover } from "@/components/dream-popover";
 import { Dust, GRAIN } from "@/components/atmosphere";
 import type { MemoryEntry, ProcessingDoc } from "@/lib/memory-types";
+import { profileName } from "@/lib/format";
 
 type Engine = "online" | "offline" | "checking";
 
@@ -46,16 +47,18 @@ export default function Home() {
 
   // First name for the greeting, pulled from the profile itself.
   useEffect(() => {
-    fetch("/api/profile")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        const facts: string[] = [
+    Promise.all([
+      fetch("/api/profile").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/captures").then((r) => (r.ok ? r.json() : null)),
+    ])
+      .then(([d, c]) => {
+        // only the user's own name — not the landlord's, not the sister's
+        const n = profileName([
           ...(d?.profile?.static ?? []),
           ...(d?.profile?.dynamic ?? []),
-        ];
-        // only the user's own name — not the landlord's, not the sister's
-        const m = facts.join(" ").match(/(?:user'?s?|my) name is (\w+)/i);
-        if (m) setName(m[1]);
+          ...((c?.captures ?? []) as Array<{ text: string }>).map((x) => x.text),
+        ]);
+        if (n) setName(n);
       })
       .catch(() => {});
   }, []);
