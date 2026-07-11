@@ -235,6 +235,7 @@ export default function Brain() {
   const [captures, setCaptures] = useState<Capture[] | null>(null);
   const [hintsFor, setHintsFor] = useState<Record<string, string[]>>({});
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [capQ, setCapQ] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [closing, setClosing] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
@@ -367,8 +368,13 @@ export default function Brain() {
   }, [captures]);
 
   const dayGroups = useMemo(() => {
+    const needle = capQ.trim().toLowerCase();
     const shown = (captures ?? []).filter(
-      (c) => !typeFilter || String(c.meta.type ?? "memory") === typeFilter,
+      (c) =>
+        (!typeFilter || String(c.meta.type ?? "memory") === typeFilter) &&
+        (!needle ||
+          c.text.toLowerCase().includes(needle) ||
+          String(c.meta.entities ?? "").toLowerCase().includes(needle)),
     );
     const out: Array<{ day: string; items: Capture[] }> = [];
     shown.forEach((c) => {
@@ -378,7 +384,7 @@ export default function Brain() {
       else out.push({ day: label, items: [c] });
     });
     return out;
-  }, [captures, typeFilter, today]);
+  }, [captures, typeFilter, capQ, today]);
 
   const openCount = ledger?.open.length ?? 0;
   const lateCount = ledger?.open.filter((c) => c.due && c.due < today).length ?? 0;
@@ -642,6 +648,11 @@ export default function Brain() {
                 {t}
               </span>
             ))}
+            {entries.length > 60 && (
+              <span className="pt-0.5 text-[10px] text-zinc-600">
+                newest 60 of {entries.length}
+              </span>
+            )}
           </div>
         </>
       )}
@@ -760,11 +771,19 @@ export default function Brain() {
       {view === "captures" && (
         <div className="absolute inset-0 overflow-y-auto pb-24 pt-24">
           <div className="mx-auto flex w-[min(92vw,640px)] flex-col gap-6">
-            <div>
-              <h1 className="text-[26px] font-light tracking-tight text-zinc-50">Captures</h1>
-              <p className="mt-1 text-[13.5px] text-zinc-500">
-                Everything you&apos;ve told me, with the envelope it was written in.
-              </p>
+            <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+              <div>
+                <h1 className="text-[26px] font-light tracking-tight text-zinc-50">Captures</h1>
+                <p className="mt-1 text-[13.5px] text-zinc-500">
+                  Everything you&apos;ve told me, with the envelope it was written in.
+                </p>
+              </div>
+              <input
+                value={capQ}
+                onChange={(e) => setCapQ(e.target.value)}
+                placeholder="search captures"
+                className="glass-chip h-9 w-52 rounded-full px-4 text-[13px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25"
+              />
             </div>
 
             {captures && captures.length > 0 && (
@@ -804,6 +823,11 @@ export default function Brain() {
               <p className="text-[13px] text-zinc-600">opening the archive…</p>
             ) : captures.length === 0 ? (
               <p className="text-[14px] font-light text-zinc-400">Nothing captured yet.</p>
+            ) : dayGroups.length === 0 ? (
+              <p className="text-[13.5px] text-zinc-500">
+                Nothing matches{capQ ? ` “${capQ.trim()}”` : ""} — try the search on the graph
+                too; it looks inside every memory.
+              </p>
             ) : (
               dayGroups.map((g) => (
                 <section key={g.day}>
@@ -835,7 +859,9 @@ export default function Brain() {
                       )
                         metaBits.push(`about ${c.meta.storyDate as string}`);
                       if (typeof c.meta.due === "string")
-                        metaBits.push(`due ${c.meta.due as string}`);
+                        metaBits.push(
+                          `due ${/^\d{4}-\d{2}-\d{2}$/.test(c.meta.due as string) ? prettyDate(c.meta.due as string) : (c.meta.due as string)}`,
+                        );
                       if (c.meta.redacted === true) metaBits.push("secrets stripped");
                       return (
                         <article

@@ -205,8 +205,12 @@ function VoiceCore({
       if (!res.ok) throw new Error(data.error ?? "couldn't reach ElevenLabs");
 
       type AgendaItem = { content: string; due: string | null; overdue: boolean; dueToday: boolean };
-      const agendaText = (agendaData.commitments as AgendaItem[]).length
-        ? (agendaData.commitments as AgendaItem[])
+      // nearest-due first, capped — a wall of ledger drowns the persona;
+      // the agent can always pull the full list through get_agenda
+      const allOpen = agendaData.commitments as AgendaItem[];
+      const agendaText = allOpen.length
+        ? allOpen
+            .slice(0, 10)
             .map(
               (c) =>
                 `- ${c.content}${
@@ -215,7 +219,10 @@ function VoiceCore({
                     : ""
                 }`,
             )
-            .join("\n")
+            .join("\n") +
+          (allOpen.length > 10
+            ? `\n(…and ${allOpen.length - 10} more — get_agenda has the full ledger)`
+            : "")
         : "none";
       const boundariesText = (pinnedData.pinned as string[]).length
         ? (pinnedData.pinned as string[]).map((p) => `- ${p}`).join("\n")
