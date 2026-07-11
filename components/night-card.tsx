@@ -43,6 +43,7 @@ export function NightCard() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch; state lands after await, no cascade
     void load();
   }, [load]);
 
