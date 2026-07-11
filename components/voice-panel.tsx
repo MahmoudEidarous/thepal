@@ -249,8 +249,18 @@ function VoiceCore({
       const hi = hour < 5 ? `Still up${namePart}?` : `Hey${namePart}.`;
       const dueDay = (d: string) =>
         new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { weekday: "long" });
+      // ledger items are written in the user's voice ("I still owe…") —
+      // spoken BY the agent they must flip person, or the agent owes it
+      const inYourVoice = (s: string) =>
+        s
+          .replace(/\bI am\b/g, "you are")
+          .replace(/\bI'm\b/g, "you're")
+          .replace(/\bI've\b/g, "you've")
+          .replace(/\bI\b/g, "you")
+          .replace(/\b[Mm]y\b/g, "your")
+          .replace(/\bme\b/g, "you");
       const urgentLine = urgent
-        ? `${urgent.content.split(/(?<=[.!?])\s/)[0].replace(/\.$/, "")}${
+        ? `${inYourVoice(urgent.content.split(/(?<=[.!?])\s/)[0]).replace(/\.$/, "")}${
             urgent.overdue
               ? " — that one's overdue"
               : urgent.dueToday
