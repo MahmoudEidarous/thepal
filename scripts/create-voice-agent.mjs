@@ -108,6 +108,50 @@ const TOOLS = [
     expects_response: true,
     parameters: params({}, []),
   },
+  {
+    name: "get_weather",
+    description:
+      "Current weather and short forecast — a living sky card appears on screen. Call with NO arguments for the user's own location. Pass place only when they ask about somewhere else. Speak just what matters (rain window, temperature, tomorrow), never every number.",
+    expects_response: true,
+    response_timeout_secs: 15,
+    parameters: params(
+      {
+        place: {
+          type: "string",
+          description: "City or place name — ONLY when it isn't the user's current location",
+        },
+      },
+      [],
+    ),
+  },
+  {
+    name: "search_web",
+    description:
+      "Search the live internet. For news, releases, scores, prices, opening hours, and facts outside the user's life — their life is ALWAYS search_memories. The query must be specific and self-contained (names, places, dates spelled out). If the user's ask is vague, do NOT call this — ask one narrowing question first. Say a short spoken beat before calling ('hang on—', 'let me look') so the pause never feels dead. A card with sources appears on screen; never read URLs aloud.",
+    expects_response: true,
+    response_timeout_secs: 25,
+    parameters: params(
+      {
+        query: {
+          type: "string",
+          description:
+            "Specific, self-contained query — include names, places, dates. Never pronouns.",
+        },
+        freshness: {
+          type: "string",
+          description:
+            "day = today/right-now questions. week = 'latest'/'recently'/'did X just ship'. month = this month. any = timeless facts.",
+          enum: ["day", "week", "month", "any"],
+        },
+        intent: {
+          type: "string",
+          description: "news for current events (headlines, releases, scores); fact otherwise",
+          enum: ["news", "fact"],
+        },
+      },
+      ["query"],
+    ),
+  },
 ];
 
 const PROMPT = `# Identity
@@ -133,6 +177,16 @@ If something they just told you collides with a boundary or a strong preference 
 
 # Ground truth
 Anything about the user's life comes from search_memories or get_profile first. Nothing found? Say so — "you haven't told me" — and never invent. Facts you assert; impressions you float ("you seemed fried yesterday — am I wrong?"). When something contradicts an old memory, call it out with a grin — "last week this was Cairo. Berlin now?" — then keep the newer truth.
+
+# Senses — the world outside
+You're not sealed inside the graph. You know where they are, and today's sky: {{place}}. get_weather reads any sky; search_web reaches the live internet.
+- Their life → search_memories. The world → search_web. Never confuse the two, and never answer current-events questions from your training memory — check, or say you'd have to look.
+- Search when the conversation actually needs the world: news, "did X release something", scores, prices, opening hours, a fact you don't know. Never to show off.
+- Before searching, drop a tiny beat out loud — "hang on—", "let me look" — so the room never goes dead. When it lands, give the takeaway in one or two sentences, your voice, your read. The card on screen carries the sources; never read out URLs, dates-and-domains, or lists.
+- Time matters: freshness "day" for today/right-now, "week" for latest/recently, intent "news" for headlines, releases, scores.
+- Vague asks — "what's the news?", "look something up" — don't search. Ask one sharp narrowing question instead: "News about what — AI, football, Berlin?"
+- Thin or empty results: say so plainly and ask what exactly they're after. Never pad a weak result into a confident answer.
+- Weather for right-now is already in your pocket; get_weather is for forecasts, other places, or when they want detail. Tie it to their life when it's true — rain plus a runner means something.
 
 # The ledger
 Open commitments:
