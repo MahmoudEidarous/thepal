@@ -1,6 +1,7 @@
 import { supermemory, spaceTag } from "@/lib/supermemory";
 import { apiError, asSpace } from "@/lib/validate";
 import { enrich, localToday, redactSecrets, type Envelope } from "@/lib/envelope";
+import { invalidateCorpus } from "@/lib/fusion";
 
 // The Writer. Every memory — spoken, typed, or dropped as a file —
 // passes through here once, gets its secrets stripped locally, and is
@@ -97,6 +98,9 @@ export async function POST(request: Request) {
       ),
     );
 
+    // a memory told seconds ago must be recallable seconds later — the
+    // fusion's fresh-list only sees it if the corpus cache re-reads
+    invalidateCorpus(asSpace(body.space));
     return Response.json({ ...doc, envelope: envelope ?? undefined });
   } catch (err) {
     return apiError(err);
