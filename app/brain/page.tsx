@@ -6,7 +6,7 @@ import { Dust, GRAIN } from "@/components/atmosphere";
 import { profileName, timeAgo } from "@/lib/format";
 import type { MemoryEntry } from "@/lib/memory-types";
 
-type View = "graph" | "ledger" | "captures";
+type View = "graph" | "people" | "ledger" | "captures";
 
 type Node = MemoryEntry & {
   x: number;
@@ -236,6 +236,8 @@ export default function Brain() {
   const [hintsFor, setHintsFor] = useState<Record<string, string[]>>({});
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [capQ, setCapQ] = useState("");
+  const [personQ, setPersonQ] = useState("");
+  const [personSel, setPersonSel] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [closing, setClosing] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
@@ -245,7 +247,7 @@ export default function Brain() {
   // deep link: /brain?tab=ledger
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    if (t === "ledger" || t === "captures")
+    if (t === "ledger" || t === "captures" || t === "people")
       // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time URL read after hydration
       setView(t);
   }, []);
@@ -394,6 +396,61 @@ export default function Brain() {
   const openCount = ledger?.open.length ?? 0;
   const lateCount = ledger?.open.filter((c) => c.due && c.due < today).length ?? 0;
 
+  // ── people & places — the envelope tags entities on every write ──
+  const people = useMemo(() => {
+    type Ent = { name: string; aliases: Set<string>; items: Capture[]; types: Map<string, number> };
+    const map = new Map<string, Ent>();
+    const addTo = (e: Ent, c: Capture) => {
+      if (e.items.includes(c)) return;
+      e.items.push(c);
+      const t = String(c.meta.type ?? "memory");
+      e.types.set(t, (e.types.get(t) ?? 0) + 1);
+    };
+    for (const c of captures ?? []) {
+      if (typeof c.meta.entities !== "string") continue;
+      for (const raw of (c.meta.entities as string).split(", ")) {
+        const parts = raw.split("/").map((s) => s.trim()).filter(Boolean);
+        if (!parts[0]) continue;
+        const key = parts[0].toLowerCase();
+        const e =
+          map.get(key) ??
+          ({ name: parts[0], aliases: new Set<string>(), items: [], types: new Map() } as Ent);
+        parts.slice(1).forEach((a) => e.aliases.add(a));
+        addTo(e, c);
+        map.set(key, e);
+      }
+    }
+    // fold alias entries into their canonical owner ("Mom/Hoda" + "Hoda")
+    for (const e of [...map.values()]) {
+      for (const a of e.aliases) {
+        const dupe = map.get(a.toLowerCase());
+        if (dupe && dupe !== e) {
+          dupe.items.forEach((c) => addTo(e, c));
+          dupe.aliases.forEach((x) => e.aliases.add(x));
+          map.delete(a.toLowerCase());
+        }
+      }
+    }
+    return [...map.values()]
+      .map((e) => ({
+        name: e.name,
+        aliases: [...e.aliases].filter((a) => a.toLowerCase() !== e.name.toLowerCase()),
+        items: e.items.slice().sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
+        types: [...e.types.entries()].sort((a, b) => b[1] - a[1]),
+      }))
+      .sort((a, b) => b.items.length - a.items.length);
+  }, [captures]);
+
+  const selPerson = personSel ? people.find((p) => p.name === personSel) ?? null : null;
+  const personCommitments = useMemo(() => {
+    if (!selPerson || !ledger) return [];
+    const names = [selPerson.name, ...selPerson.aliases].map((n) =>
+      n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    );
+    const re = new RegExp(`\\b(${names.join("|")})\\b`, "i");
+    return ledger.open.filter((c) => re.test(c.content));
+  }, [selPerson, ledger]);
+
   return (
     <div className="relative h-dvh overflow-hidden" onClick={() => setSelected(null)}>
       <div
@@ -421,6 +478,7 @@ export default function Brain() {
           {(
             [
               ["graph", entries.length],
+              ["people", people.length],
               ["ledger", openCount],
               ["captures", captures?.length ?? 0],
             ] as Array<[View, number]>
@@ -660,6 +718,170 @@ export default function Brain() {
             )}
           </div>
         </>
+      )}
+
+      {/* ── people & places — a page for everyone you mention ─── */}
+      {view === "people" && (
+        <div className="absolute inset-0 overflow-y-auto pb-24 pt-24">
+          <div className="mx-auto flex w-[min(92vw,720px)] flex-col gap-6">
+            {!selPerson ? (
+              <>
+                <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+                  <div>
+                    <h1 className="text-[26px] font-light tracking-tight text-zinc-50">
+                      People & places
+                    </h1>
+                    <p className="mt-1 text-[13.5px] text-zinc-500">
+                      Everyone and everything your memory knows by name.
+                    </p>
+                  </div>
+                  <input
+                    value={personQ}
+                    onChange={(e) => setPersonQ(e.target.value)}
+                    placeholder="find someone"
+                    className="glass-chip h-9 w-48 rounded-full px-4 text-[13px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                  {people
+                    .filter(
+                      (p) =>
+                        !personQ.trim() ||
+                        [p.name, ...p.aliases]
+                          .join(" ")
+                          .toLowerCase()
+                          .includes(personQ.trim().toLowerCase()),
+                    )
+                    .map((p) => (
+                      <button
+                        key={p.name}
+                        onClick={() => setPersonSel(p.name)}
+                        className="rounded-2xl border border-white/[0.08] bg-white/[0.035] px-4 py-3.5 text-left transition-all hover:border-white/20 hover:bg-white/[0.06]"
+                      >
+                        <p className="truncate text-[14.5px] font-medium text-zinc-100">
+                          {p.name}
+                        </p>
+                        {p.aliases.length > 0 && (
+                          <p className="truncate text-[11px] text-zinc-600">
+                            also {p.aliases.join(", ")}
+                          </p>
+                        )}
+                        <p className="mt-1.5 flex items-center gap-2">
+                          <span className="font-mono text-[10px] text-zinc-500">
+                            {p.items.length} memor{p.items.length === 1 ? "y" : "ies"}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            {p.types.slice(0, 4).map(([t]) => (
+                              <span
+                                key={t}
+                                title={t}
+                                className="size-[6px] rounded-full"
+                                style={{ background: TYPE_COLORS[t] ?? TYPE_COLORS.memory }}
+                              />
+                            ))}
+                          </span>
+                        </p>
+                      </button>
+                    ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <button
+                    onClick={() => setPersonSel(null)}
+                    className="font-mono text-[10.5px] uppercase tracking-[0.2em] text-zinc-500 transition-colors hover:text-zinc-200"
+                  >
+                    ← everyone
+                  </button>
+                  <h1 className="mt-2 text-[26px] font-light tracking-tight text-zinc-50">
+                    {selPerson.name}
+                    {selPerson.aliases.length > 0 && (
+                      <span className="ml-3 text-[13px] text-zinc-500">
+                        also {selPerson.aliases.join(", ")}
+                      </span>
+                    )}
+                  </h1>
+                  <p className="mt-1 text-[13.5px] text-zinc-500">
+                    {selPerson.items.length} memor
+                    {selPerson.items.length === 1 ? "y" : "ies"} between you
+                  </p>
+                </div>
+
+                {personCommitments.length > 0 && (
+                  <section>
+                    <h2 className="mb-2.5 font-mono text-[10.5px] uppercase tracking-[0.25em] text-amber-200/80">
+                      open between you
+                    </h2>
+                    <div className="glass divide-y divide-white/[0.055] rounded-2xl">
+                      {personCommitments.map((c) => {
+                        const due = c.due ? fmtDue(c.due, today) : null;
+                        return (
+                          <div key={c.id} className="flex items-center gap-3.5 px-5 py-3">
+                            <span className="size-[7px] shrink-0 rounded-full bg-amber-300 shadow-[0_0_8px_1px_rgb(252_211_77/0.4)]" />
+                            <p className="flex-1 text-[13.5px] leading-relaxed text-zinc-200">
+                              {c.content}
+                            </p>
+                            {due && (
+                              <span
+                                className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ${DUE_TONE[due.tone]}`}
+                              >
+                                {due.text}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                )}
+
+                <section className="flex flex-col gap-2">
+                  {selPerson.items.map((c) => {
+                    const type = String(c.meta.type ?? "memory");
+                    const color = TYPE_COLORS[type] ?? TYPE_COLORS.memory;
+                    const tentative = type === "impression";
+                    return (
+                      <article
+                        key={c.id}
+                        className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-4 py-3"
+                      >
+                        <div className="flex items-baseline gap-2.5">
+                          <span
+                            className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em]"
+                            style={{ color }}
+                          >
+                            {type}
+                          </span>
+                          {tentative && (
+                            <span className="text-[10.5px] italic text-zinc-600">
+                              held loosely
+                            </span>
+                          )}
+                          <span className="ml-auto shrink-0 text-[10.5px] text-zinc-600">
+                            {typeof c.meta.storyDate === "string"
+                              ? (c.meta.storyDate as string)
+                              : c.createdAt
+                                ? timeAgo(c.createdAt)
+                                : ""}
+                          </span>
+                        </div>
+                        <p
+                          className={
+                            "mt-1.5 text-[13.5px] leading-relaxed " +
+                            (tentative ? "italic text-zinc-400" : "text-zinc-200")
+                          }
+                        >
+                          {c.text.length > 220 ? `${c.text.slice(0, 220)}…` : c.text}
+                        </p>
+                      </article>
+                    );
+                  })}
+                </section>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       {/* ── ledger ────────────────────────────────────────────── */}
