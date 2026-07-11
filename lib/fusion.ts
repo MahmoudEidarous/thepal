@@ -44,6 +44,8 @@ type Lean = {
   story: string | null;
   due: string | null;
   type: string | null;
+  // the ledger's own state (metadata.status): open | done for commitments
+  ledger: string | null;
   entities: string | null;
 };
 
@@ -95,6 +97,7 @@ async function getCorpus(space: Space): Promise<Corpus> {
       story: str(m.storyDate),
       due: str(m.due),
       type: str(m.type),
+      ledger: str(m.status),
       entities: str(m.entities),
     });
     // "Layla/my sister#person, Kasr Al Ainy hospital/Kasr Al Ainy#place"
@@ -361,6 +364,21 @@ export async function fusedRecall(opts: {
     if (safety.length)
       listsP.push(Promise.all(safety.map(toHit)).then((results) => ({ results, w: 2.2 })));
   }
+  // dues list: "what's due", "deadline", "what do I owe" are ledger
+  // questions in conversational clothes. At 400+ docs the surrounding
+  // words ("weekend", "week") match a dozen bystander memories — the
+  // typed ledger's open commitments cut through, nearest due first.
+  let duesP: Promise<Array<Hit & { rrfKey: string }>> = Promise.resolve([]);
+  if (/\b(due|deadline|overdue|owed?|owes)\b/i.test(q)) {
+    const dues = corpus.docs
+      .filter((d) => d.type === "commitment" && d.ledger === "open")
+      .sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999"))
+      .slice(0, 5);
+    if (dues.length) {
+      duesP = Promise.all(dues.map(toHit));
+      listsP.push(duesP.then((results) => ({ results, w: 2.0 })));
+    }
+  }
   // fresh list: still-processing docs aren't searchable yet — a memory
   // told seconds ago must not produce "you never told me"
   {
@@ -421,6 +439,20 @@ export async function fusedRecall(opts: {
   // dup-aware guaranteed seats: base top-3 may be added back, but never
   // a twin of something the collapse already kept
   for (const b of base.slice(0, 3)) {
+    const present = kept
+      .slice(0, limit)
+      .some(
+        (r) =>
+          r.documentId === b.documentId ||
+          r.memory === b.memory ||
+          jaccard(words(r.memory), words(b.memory)) >= TWIN,
+      );
+    if (!present) kept = [...kept.slice(0, limit - 1), b, ...kept.slice(limit - 1)];
+  }
+  // when the question asks what's owed, the two nearest open dues are in
+  // the answer no matter what the words around them matched — same
+  // dup-aware insertion as the base seats
+  for (const b of (await duesP).slice(0, 2)) {
     const present = kept
       .slice(0, limit)
       .some(

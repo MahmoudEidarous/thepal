@@ -19,7 +19,9 @@ const CASES = [
   { q: "what's on the stove on Sundays?", expect: ["koshari"] },
   { q: "what did the ER visit teach me?", expect: ["penicillin"] },
   { q: "who's gone quiet on me lately?", expect: ["sofia"] },
-  { q: "what's due before the weekend is over?", expect: ["misfiling"] },
+  // the misfiling writeup was CLOSED by a later telling (seed-deep) —
+  // the honest answer is now whatever the ledger holds due this Sunday
+  { q: "what's due before the weekend is over?", expect: ["mock interview", "demo video", "layla"] },
   { q: "what's the story behind the name?", expect: ["grandfather", "notebook"] },
   { q: "did anything get broken when we were kids?", expect: ["arm", "layla"] },
   { q: "what's my ride called?", expect: ["cube"] },
@@ -31,7 +33,7 @@ const CASES = [
   { q: "what happened out in the desert?", expect: ["wadi rum", "jordan"] },
   { q: "why do I send dishes back at restaurants?", expect: ["cilantro"], resolved: "foods I hate or refuse to eat" },
   { q: "what's still sitting unsigned?", expect: ["contract", "leipzig"] },
-  { q: "who do I still need to charm for money?", expect: ["marcus"] },
+  { q: "who do I still need to charm for money?", expect: ["marcus"], resolved: "which investor do I still need to convince for funding" },
   { q: "how many mistakes are we down to?", expect: ["twelve", "12"] },
   { q: "what's my kind of sky?", expect: ["rain"], resolved: "favorite weather" },
   { q: "what's overdue and haunting me?", expect: ["deck", "pitch"] },
