@@ -127,9 +127,11 @@ export async function POST(req: Request) {
     // wire mode: when did-it-happen matters, trust date-filtered results
     // over a synthesized answer that might lean on last month's web
     if (newsy || freshness === "day" || freshness === "week") {
+      // type "fast" measured at ~0.8s vs "auto" ~2.7s, equally fresh results —
+      // for a voice in mid-sentence that difference is the whole feature
       const data = await exa("/search", key, {
         query,
-        type: "auto",
+        type: "fast",
         numResults: 10,
         ...(newsy ? { category: "news" } : {}),
         ...(freshness !== "any" ? { startPublishedDate: sinceISO(freshness) } : {}),
@@ -140,7 +142,7 @@ export async function POST(req: Request) {
       if (!sources.length && freshness !== "any") {
         const retry = await exa("/search", key, {
           query,
-          type: "auto",
+          type: "fast",
           numResults: 10,
           ...(newsy ? { category: "news" } : {}),
           contents: { highlights: true },
