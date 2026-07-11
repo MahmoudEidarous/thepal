@@ -52,7 +52,7 @@ export async function GET(request: Request) {
     const tag = spaceTag(asSpace(url.searchParams.get("space")));
     const docs = await supermemory.documents.list({
       containerTags: [tag],
-      limit: 200,
+      limit: 500,
       sort: "createdAt",
       order: "desc",
     });
