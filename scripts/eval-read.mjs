@@ -68,6 +68,10 @@ async function answer(q, memories) {
     body: JSON.stringify({
       model: "deepseek/deepseek-v4-flash",
       temperature: 0,
+      max_tokens: 400,
+      // providers began serving hybrid-reasoning variants that think the
+      // whole budget away and return empty content — reasoning off
+      reasoning: { enabled: false },
       messages: [
         {
           role: "system",

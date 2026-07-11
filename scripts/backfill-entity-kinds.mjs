@@ -40,6 +40,7 @@ const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
   },
   body: JSON.stringify({
     model: "deepseek/deepseek-v4-flash",
+    reasoning: { enabled: false },
     temperature: 0,
     response_format: { type: "json_object" },
     messages: [

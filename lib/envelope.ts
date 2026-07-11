@@ -101,12 +101,23 @@ field rules:
 async function callEnricher(model: string, prompt: string, timeoutMs: number): Promise<Envelope> {
   const { object } = await generateObject({
     // route to the fastest provider — slow upstreams were the main
-    // source of enrichment timeouts
-    model: openrouter(model, { extraBody: { provider: { sort: "throughput" } } }),
+    // source of enrichment timeouts. Reasoning must be OFF: providers
+    // began serving hybrid-reasoning deepseek variants (2026-07-12)
+    // that burn the whole token budget thinking before the JSON,
+    // nulling every envelope.
+    model: openrouter(model, {
+      extraBody: { provider: { sort: "throughput" }, reasoning: { enabled: false } },
+    }),
     schema: EnvelopeSchema,
     system: RULES,
     prompt,
     temperature: 0,
+    // an envelope is ~700 tokens — but a long note's envelope echoes the
+    // note in its text field, so the ceiling scales with the input.
+    // Without any cap the SDK asks for the model's whole 65k window and
+    // OpenRouter's affordability pre-check rejects the call whenever
+    // credits run low.
+    maxOutputTokens: prompt.length > 1400 ? 4500 : 2000,
     abortSignal: AbortSignal.timeout(timeoutMs),
   });
   return object;

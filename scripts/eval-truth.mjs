@@ -82,6 +82,10 @@ async function answer(q, lines) {
     body: JSON.stringify({
       model: "deepseek/deepseek-v4-flash",
       temperature: 0,
+      max_tokens: 400,
+      // reasoning variants return empty content when the budget burns —
+      // see eval-read.mjs; reasoning off keeps answers answers
+      reasoning: { enabled: false },
       messages: [
         {
           role: "system",
