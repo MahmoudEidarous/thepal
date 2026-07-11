@@ -1,7 +1,9 @@
-import { supermemory, spaceTag } from "@/lib/supermemory";
+import { fusedRecall } from "@/lib/fusion";
 import { apiError, asSpace } from "@/lib/validate";
 
-// Proactive recall: debounced client calls land here while the user types.
+// Proactive recall: the voice agent's search_memories and the typing
+// debounce both land here. One vague question fans out into parallel
+// probes + metadata-routed lists, fused by rank — see lib/fusion.ts.
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
@@ -10,13 +12,8 @@ export async function POST(request: Request) {
       return Response.json({ results: [] });
     }
     const limit = Math.min(8, Math.max(1, Number(body.limit) || 4));
-    const found = await supermemory.search.memories({
-      q,
-      containerTag: spaceTag(asSpace(body.space)),
-      limit,
-      threshold: 0.55,
-    });
-    return Response.json(found);
+    const results = await fusedRecall({ q, space: asSpace(body.space), limit });
+    return Response.json({ results });
   } catch (err) {
     return apiError(err);
   }
