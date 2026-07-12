@@ -460,7 +460,13 @@ function VoiceCore({
                   updateCard(id, { status: "error" });
                   return;
                 }
-                updateCard(id, { status: "ready", text: e.text ?? content, envelope: toFiled(e) });
+                updateCard(id, {
+                  status: "ready",
+                  text: e.text ?? content,
+                  envelope: toFiled(e),
+                  // a reschedule quietly retired the old terms — show it
+                  ...(typeof d.superseded === "string" ? { replaces: d.superseded } : {}),
+                });
               })
               .catch((err) => {
                 updateCard(id, { status: "error" });
@@ -515,12 +521,12 @@ function VoiceCore({
                     .join("\n")}`
                 : "No open commitments. The ledger is clear.";
             }),
-          complete_commitment: ({ about }: { about: string }) =>
+          complete_commitment: ({ about, outcome }: { about: string; outcome?: string }) =>
             track("closing a commitment", async () => {
               const res = await fetch("/api/agenda/complete", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ q: about }),
+                body: JSON.stringify({ q: about, outcome }),
               });
               const data = await res.json();
               if (!res.ok)
@@ -529,7 +535,9 @@ function VoiceCore({
                       .map((o: string) => `- ${o}`)
                       .join("\n")}`
                   : "No open commitments to close.";
-              return `Closed: ${data.completed}. It stays in the ledger as done.`;
+              return data.outcome === "cancelled"
+                ? `Struck off: ${data.completed}. It leaves the agenda; the history keeps it as cancelled.`
+                : `Closed: ${data.completed}. It stays in the ledger as done.`;
             }),
           // a correction rewrites the memory in place — the doc keeps its
           // place in history but stops saying the wrong thing. Synchronous:

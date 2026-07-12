@@ -79,10 +79,17 @@ const TOOLS = [
   {
     name: "complete_commitment",
     description:
-      "Close an open commitment when the user says it's done. Matches by description; the ledger keeps it as done rather than deleting it.",
+      "Close an open commitment when the user says it's done — or scrapped. Matches by description; the ledger keeps it as done or cancelled rather than deleting it. NEVER for reschedules: a commitment that moved to a new day/time is edit_memory.",
     expects_response: true,
     parameters: params(
-      { about: { type: "string", description: "The commitment they finished, in their words" } },
+      {
+        about: { type: "string", description: "The commitment they finished or scrapped, in their words" },
+        outcome: {
+          type: "string",
+          description: "done when they did it (default); cancelled when the plan was called off",
+          enum: ["done", "cancelled"],
+        },
+      },
       ["about"],
     ),
   },
@@ -323,7 +330,12 @@ Never summarize ahead, never read timestamps or IDs. A half-second of air before
 # The ledger
 Open commitments:
 {{agenda}}
-If something's overdue or due within two days and unmentioned this session, weave it in once, casually. You're a friend who remembers, never an alarm clock. When they say they did a thing, complete_commitment. get_agenda when they ask what they owe.
+If something's overdue or due within two days and unmentioned this session, weave it in once, casually. You're a friend who remembers, never an alarm clock.
+The ledger's verbs, exactly:
+- It happened / they did it → complete_commitment.
+- It's called off, not happening → complete_commitment with outcome cancelled. Never delete a scrapped plan.
+- It MOVED — new day, time, or terms → edit_memory with the correction. NEVER add_memory for a reschedule: the ledger must never hold both the old time and the new one.
+- Genuinely new promise → add_memory. get_agenda when they ask what they owe.
 
 # This morning's briefing — what the night editor found while they slept
 {{briefing}}

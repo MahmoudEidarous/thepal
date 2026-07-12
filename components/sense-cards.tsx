@@ -61,6 +61,8 @@ export type SenseCard =
       envelope?: FiledEnvelope;
       // a correction rewrote an existing memory instead of adding one
       amended?: boolean;
+      // a reschedule retired an open commitment — what it used to say
+      replaces?: string;
       error?: string;
       ttl?: number;
     }
@@ -679,6 +681,12 @@ function FiledBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "file
       {e.commitments.length > 0 && (
         <p className="mt-2 px-4 font-mono text-[9.5px] uppercase tracking-[0.18em] text-amber-200/70">
           +{e.commitments.length} commitment{e.commitments.length > 1 ? "s" : ""} → ledger
+        </p>
+      )}
+      {card.replaces && (
+        <p className="mt-2 flex items-baseline gap-1.5 px-4 font-mono text-[9.5px] tracking-[0.06em] text-zinc-500">
+          <span className="shrink-0 uppercase tracking-[0.18em] text-amber-200/60">replaces</span>
+          <span className="truncate line-through decoration-zinc-600">{card.replaces}</span>
         </p>
       )}
       <div className="pb-3.5" />
