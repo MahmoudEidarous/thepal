@@ -32,7 +32,10 @@ const CASES = [
   { q: "which class am I dragging myself to every week?", expect: ["german", "a2"] },
   { q: "what happened out in the desert?", expect: ["wadi rum", "jordan"] },
   { q: "why do I send dishes back at restaurants?", expect: ["cilantro"], resolved: "foods I hate or refuse to eat" },
-  { q: "what's still sitting unsigned?", expect: ["contract", "leipzig"] },
+  // was "what's still sitting unsigned?" → Leipzig contract, until the
+  // user signed it live on 2026-07-12 and the truth closed under the
+  // check. Same un-stem machinery, re-pinned on a target still open.
+  { q: "what's still unpacked?", expect: ["packing", "boxes"] },
   { q: "who do I still need to charm for money?", expect: ["marcus"], resolved: "which investor do I still need to convince for funding" },
   { q: "how many mistakes are we down to?", expect: ["twelve", "12"] },
   { q: "what's my kind of sky?", expect: ["rain"], resolved: "favorite weather" },
