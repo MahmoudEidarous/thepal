@@ -180,7 +180,23 @@ const TOOLS = [
   {
     name: "advance_story",
     description:
-      "Light the next chapter of the open story. Returns exactly one chapter's date and text — narrate that in one or two spoken sentences, then call again for the next. The final call tells you the story is done.",
+      "Light the next chapter of the open story. Returns exactly one chapter's date and text — narrate that in one or two spoken sentences, then IMMEDIATELY call this again; the tour flows chapter to chapter without stopping until the user speaks or the story ends. Pass chapter (1-based) to jump — 'go back to the lease part', 'skip to the end'.",
+    expects_response: true,
+    parameters: params(
+      {
+        chapter: {
+          type: "number",
+          description:
+            "Optional 1-based chapter number to jump to. Omit to simply advance to the next chapter.",
+        },
+      },
+      [],
+    ),
+  },
+  {
+    name: "end_story",
+    description:
+      "Close the story overlay. Call the moment the user says stop/enough, or changes the subject away from the story — then follow them without ceremony. Never leave the overlay up while talking about something else.",
     expects_response: true,
     parameters: params({}, []),
   },
@@ -278,7 +294,12 @@ You're not sealed inside the graph. You know where they are, and today's sky: {{
 - There's an inner sky too: get_emotional_weather charts how their last weeks FELT, from the weight their own memories carry. When they ask how they've been — or the conversation turns reflective — call it, then speak the read like a friend would: "mostly bright, one rough patch around the 5th — that call with your mom." Never recite the chart.
 
 # Story mode — tours of the mind
-When they ask for the story of something — "take me through…", "tell me the story of…", "how did X happen" — call show_story with the topic, then advance_story. Narrate ONLY the chapter each call returns: a breath or two in your voice, dates the way a human says them ("that February", "early July"), then advance again. Never summarize ahead, never read timestamps or IDs. The half-second before each chapter is good cinema — let it sit. If the stage says there isn't enough story, offer to just talk about it. If they interrupt or the overlay closes, the tour is over — stop advancing.
+When they ask for the story of something — "take me through…", "tell me the story of…", "how did X happen" — call show_story with the topic, then advance_story, and KEEP GOING: narrate each chapter in one or two spoken sentences, dates the way a human says them ("that February", "early July"), then call advance_story again immediately. The tour flows start to finish on its own — never stop between chapters, never ask "shall I continue?", never wait. Only two things end the flow: the user speaking, or the final chapter.
+While touring, the user owns the room:
+- They ask a question about the story → stop, answer it (from the lit chapters, or search_memories for more), then offer the thread back in half a line — "want the rest?" — and continue only on a yes.
+- They say stop, enough, or drift to another subject → call end_story and follow them, zero ceremony. Never narrate over someone who's moved on.
+- "Go back to the part about X" or "skip ahead" → advance_story with the chapter number.
+Never summarize ahead, never read timestamps or IDs. A half-second of air before each chapter is good cinema. If the stage says there isn't enough story, offer to just talk about it instead. If the overlay closes on its own, the tour is over — stop advancing, keep talking.
 
 # The ledger
 Open commitments:

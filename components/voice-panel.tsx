@@ -110,7 +110,6 @@ function VoiceCore({
     storyRef.current = s;
     setStoryView(s);
   };
-
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const f = params.get("orb");
@@ -202,6 +201,30 @@ function VoiceCore({
   useEffect(() => {
     isSpeakingRef.current = isSpeaking;
   }, [isSpeaking]);
+
+  // the user left the story themselves (✕ or Esc) — the agent must hear
+  // about it, or it keeps narrating into a dark room
+  const conversationRef = useRef(conversation);
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
+  const closeStoryByHand = () => {
+    if (!storyRef.current) return;
+    setStory(null);
+    try {
+      conversationRef.current.sendContextualUpdate(
+        "The user closed the story overlay themselves. The tour is over — do not call advance_story again. Pick the conversation back up naturally, no ceremony.",
+      );
+    } catch {}
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && storyRef.current) closeStoryByHand();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads refs only
+  }, []);
 
   // a story doesn't outlive its narrator — clear it when the session ends
   const wasConnected = useRef(false);
@@ -578,13 +601,20 @@ function VoiceCore({
               setStory({ topic, beats, active: -1, done: false });
               return `The stage is lit: ${beats.length} chapters, ${beats[0].date} to ${
                 beats[beats.length - 1].date
-              }. Call advance_story to open chapter one. Narrate ONLY what each call returns — one or two spoken sentences, dates said like a human — then advance again. Stop if the user interrupts.`;
+              }. Call advance_story now. The tour flows on its own: narrate each chapter in one or two spoken sentences, then IMMEDIATELY call advance_story again — never pause to ask, never wait. Only the user speaking stops the flow.`;
             }),
-          advance_story: () =>
+          // one chapter per call — the voice structurally cannot outrun
+          // the screen. Passing chapter jumps anywhere ("go back to the
+          // part about the lease").
+          advance_story: ({ chapter }: { chapter?: number } = {}) =>
             track("next chapter", async () => {
               const s = storyRef.current;
               if (!s) return "No story is open — call show_story first.";
-              const next = s.active + 1;
+              const jump =
+                typeof chapter === "number" && chapter >= 1 && chapter <= s.beats.length
+                  ? chapter - 1
+                  : null;
+              const next = jump ?? s.active + 1;
               if (next >= s.beats.length) {
                 setStory({ ...s, done: true });
                 setTimeout(() => {
@@ -592,12 +622,20 @@ function VoiceCore({
                 }, 7_000);
                 return "That was the last chapter — the whole path is lit. Close with ONE line about the arc, then move on.";
               }
-              setStory({ ...s, active: next });
+              setStory({ ...s, active: next, done: false });
               const b = s.beats[next];
               return `Chapter ${next + 1} of ${s.beats.length} — ${b.date}${
                 b.dated ? "" : " (timing approximate — dated by when they told you)"
-              }: ${b.text}`;
+              }: ${b.text}\nNarrate this in one or two sentences, then IMMEDIATELY call advance_story again. Do not stop. Do not ask.`;
             }),
+          // the agent's own exit: the user said stop, or changed the subject
+          end_story: () => {
+            const wasOpen = !!storyRef.current;
+            setStory(null);
+            return wasOpen
+              ? "The stage is dark — story closed. Back to the conversation, no ceremony."
+              : "No story was open.";
+          },
           // a web finding worth keeping becomes a memory that speaks its
           // own provenance — ask again tomorrow and it cites the source
           save_finding: ({ finding, source }: { finding: string; source?: string }) => {
@@ -761,17 +799,7 @@ function VoiceCore({
 
       {/* story mode — the constellation performs while the voice narrates */}
       {storyView && (
-        <StoryOverlay
-          story={storyView}
-          onClose={() => {
-            setStory(null);
-            try {
-              conversation.sendContextualUpdate(
-                "The user closed the story overlay. End the tour now — no more advance_story calls; just continue the conversation naturally.",
-              );
-            } catch {}
-          }}
-        />
+        <StoryOverlay story={storyView} onClose={closeStoryByHand} />
       )}
       {connected && ambient && cards.length === 0 && (
         <p className="pointer-events-none absolute right-6 top-[76px] z-20 font-mono text-[9.5px] uppercase tracking-[0.22em] text-zinc-600 max-sm:hidden">

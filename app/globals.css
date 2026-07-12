@@ -237,6 +237,71 @@ body {
   animation: aurora 90s ease-in-out infinite alternate;
 }
 
+/* ── story mode: the constellation performs ──────────────────────── */
+/* a star igniting sends one ring out into the dark */
+@keyframes ignite {
+  from {
+    transform: scale(0.35);
+    opacity: 0.85;
+  }
+  to {
+    transform: scale(3.4);
+    opacity: 0;
+  }
+}
+
+@utility star-ignite {
+  animation: ignite 1200ms cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+
+/* the active star's flare turns slowly, like light through a lens */
+@keyframes flare-turn {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(90deg);
+  }
+}
+
+@utility flare-turn {
+  animation: flare-turn 16s linear infinite;
+}
+
+/* chapters take the stage one by one */
+@keyframes star-in {
+  from {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@utility star-in {
+  animation: star-in 900ms cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+
+/* the lower third arrives like a subtitle: up, out of the blur */
+@keyframes subtitle-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.985);
+    filter: blur(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@utility subtitle-in {
+  animation: subtitle-in 720ms cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+
 /* a meteor, once in a long while */
 @keyframes meteor {
   0% {
@@ -369,6 +434,10 @@ body {
   .animate-hint,
   .animate-aurora,
   .animate-meteor,
+  .star-ignite,
+  .flare-turn,
+  .star-in,
+  .subtitle-in,
   .animate-rain,
   .animate-cloud,
   .animate-flash,
