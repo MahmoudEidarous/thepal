@@ -88,7 +88,6 @@ function VoiceCore({
   const [activity, setActivity] = useState<Activity[]>([]);
   const [pending, setPending] = useState<PendingForget | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [text, setText] = useState("");
   // ?orb=speaking forces a visual state — QA and demo framing only.
   // Read after mount so server and client render the same first frame.
   const [forced, setForced] = useState<OrbState | null>(null);
@@ -374,9 +373,6 @@ function VoiceCore({
       conversation.startSession({
         signedUrl: data.signedUrl,
         connectionType: "websocket",
-        // ?text mode: same agent, same tools, no microphone — used for
-        // debugging and as a quiet-environment fallback.
-        textOnly: new URLSearchParams(window.location.search).has("text"),
         dynamicVariables: {
           today: new Date().toLocaleDateString("en-CA"),
           weekday: new Date().toLocaleDateString("en-US", { weekday: "long" }),
@@ -733,15 +729,6 @@ function VoiceCore({
     }
   }
 
-  function sendTyped(e: React.FormEvent) {
-    e.preventDefault();
-    const t = text.trim();
-    if (!t || !connected) return;
-    conversation.sendUserMessage(t);
-    setLines((l) => [...l.slice(-30), { role: "user", text: t }]);
-    setText("");
-  }
-
   const orbState: OrbState =
     forced
       ? forced
@@ -861,8 +848,9 @@ function VoiceCore({
         </p>
       )}
 
-      {/* liquid-glass controls — above the story dim, so mute/type/end
-          stay in reach while the constellation performs */}
+      {/* liquid-glass controls — above the story dim, so mute/end
+          stay in reach while the constellation performs. Voice only:
+          the typed composer is gone, the orb is the whole interface. */}
       {connected && (
         <div className="absolute inset-x-0 bottom-8 z-[46] flex items-center justify-center gap-3.5">
           <button
@@ -877,18 +865,6 @@ function VoiceCore({
           >
             <MicIcon off={conversation.isMuted} />
           </button>
-
-          <form onSubmit={sendTyped}>
-            <input
-              value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                conversation.sendUserActivity();
-              }}
-              placeholder="or type it"
-              className="glass-chip h-12 w-60 rounded-full px-5 text-center text-[13.5px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25 focus:shadow-[0_0_36px_-8px_rgb(130_150_255/0.45)] sm:w-72"
-            />
-          </form>
 
           <button
             onClick={() => void conversation.endSession()}
