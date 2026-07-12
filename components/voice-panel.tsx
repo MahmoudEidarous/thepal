@@ -390,7 +390,7 @@ function VoiceCore({
                 urgentLine && urgent?.overdue ? ` And ${urgentLine}.` : ""
               } Where do you want to start?`
             : urgentLine
-              ? `${hi} Before I forget — ${urgentLine}. What's on your mind?`
+              ? `${hi} Before I forget — ${urgentLine}. Talk to me.`
               : `${hi} ${memoryCount} memories and counting. What's new?`;
 
       conversation.startSession({
