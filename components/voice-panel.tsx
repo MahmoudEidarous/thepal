@@ -137,6 +137,9 @@ function VoiceCore({
   }, []);
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
+  // when the user last said something — the story gate reads this to
+  // yield the floor instead of advancing over them
+  const lastUserSpokeAt = useRef(0);
 
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
@@ -192,8 +195,10 @@ function VoiceCore({
   }, [pending]);
 
   const conversation = useConversation({
-    onMessage: ({ message, role }) =>
-      setLines((l) => [...l.slice(-30), { role, text: message }]),
+    onMessage: ({ message, role }) => {
+      if (role === "user") lastUserSpokeAt.current = Date.now();
+      setLines((l) => [...l.slice(-30), { role, text: message }]);
+    },
     onError: (message) => setError(typeof message === "string" ? message : "Connection error"),
   });
   const { status, isSpeaking } = conversation;
@@ -225,6 +230,59 @@ function VoiceCore({
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reads refs only
   }, []);
+
+  // The instant yield. Server-side interruption takes a beat (the ASR
+  // has to transcribe the user's first word before it cuts the agent);
+  // until it lands she keeps playing over them. So the mic is watched
+  // locally: the user's voice rising while she speaks ducks her volume
+  // under them within ~120ms, and the real interruption finishes the
+  // cut. False alarm (a cough, a passing truck) restores after a beat.
+  const duckedRef = useRef(false);
+  useEffect(() => {
+    if (!connected) return;
+    let voiceTicks = 0;
+    let quietTicks = 0;
+    const restore = () => {
+      duckedRef.current = false;
+      quietTicks = 0;
+      try {
+        conversationRef.current.setVolume({ volume: 1 });
+      } catch {}
+    };
+    const t = setInterval(() => {
+      const c = conversationRef.current;
+      let input = 0;
+      try {
+        input = c.getInputVolume();
+      } catch {
+        return;
+      }
+      if (!isSpeakingRef.current) {
+        voiceTicks = 0;
+        if (duckedRef.current) restore();
+        return;
+      }
+      if (input > 0.09) {
+        voiceTicks += 1;
+        quietTicks = 0;
+        if (voiceTicks >= 2 && !duckedRef.current) {
+          duckedRef.current = true;
+          try {
+            c.setVolume({ volume: 0.12 });
+          } catch {}
+        }
+      } else {
+        voiceTicks = 0;
+        // ducked but the voice never followed through — give it ~1.2s
+        // then let her back up
+        if (duckedRef.current && ++quietTicks >= 20) restore();
+      }
+    }, 60);
+    return () => {
+      clearInterval(t);
+      restore();
+    };
+  }, [connected]);
 
   // a story doesn't outlive its narrator — clear it when the session ends
   const wasConnected = useRef(false);
@@ -521,75 +579,119 @@ function VoiceCore({
                     .join("\n")}`
                 : "No open commitments. The ledger is clear.";
             }),
-          complete_commitment: ({ about, outcome }: { about: string; outcome?: string }) =>
-            track("closing a commitment", async () => {
-              const res = await fetch("/api/agenda/complete", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ q: about, outcome }),
-              });
-              const data = await res.json();
-              if (!res.ok)
-                return data.open
-                  ? `No open commitment matches that. Still open:\n${data.open
-                      .map((o: string) => `- ${o}`)
-                      .join("\n")}`
-                  : "No open commitments to close.";
-              return data.outcome === "cancelled"
-                ? `Struck off: ${data.completed}. It leaves the agenda; the history keeps it as cancelled.`
-                : `Closed: ${data.completed}. It stays in the ledger as done.`;
-            }),
-          // a correction rewrites the memory in place — the doc keeps its
-          // place in history but stops saying the wrong thing. Synchronous:
-          // the agent needs before/after to react honestly.
-          edit_memory: ({ about, correction }: { about: string; correction: string }) =>
-            track("amending a memory", async () => {
-              const id = ++seq.current;
-              pushCard({ id, kind: "filed", status: "loading", text: correction, amended: true, ttl: 8_000 });
-              let res: Response;
-              let data: {
-                before?: string;
-                after?: string;
-                match?: string;
-                candidates?: string[];
-                error?: string;
-                envelope?: EnvelopePayload;
-              };
+          // closing a commitment can take seconds (settle-polling a doc
+          // that's still filing) — the agent must not hold its breath.
+          // Fire, react now, hear back only if the match missed.
+          complete_commitment: ({ about, outcome }: { about: string; outcome?: string }) => {
+            const id = ++seq.current;
+            setActivity((a) => [...a, { id, label: "closing a commitment" }]);
+            void (async () => {
               try {
-                res = await fetch("/api/amend", {
+                const res = await fetch("/api/agenda/complete", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ q: about, outcome }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                  try {
+                    conversationRef.current.sendContextualUpdate(
+                      data.open?.length
+                        ? `IMPORTANT — nothing was closed: no open commitment matched "${about}". Still open: ${(
+                            data.open as string[]
+                          )
+                            .slice(0, 6)
+                            .join(" | ")}. Tell the user and ask which one they meant.`
+                        : "IMPORTANT — nothing was closed: the ledger has no open commitment matching that. Tell the user.",
+                    );
+                  } catch {}
+                }
+              } catch {
+                try {
+                  conversationRef.current.sendContextualUpdate(
+                    "IMPORTANT — closing that commitment FAILED (the engine didn't answer). Tell the user it's still on the books.",
+                  );
+                } catch {}
+              } finally {
+                setActivity((a) => a.filter((x) => x.id !== id));
+              }
+            })();
+            return outcome === "cancelled"
+              ? "Striking it off as called-off — react in a few words and keep moving. If nothing matched you'll get a note; own it then."
+              : "Closing it — react in a few words ('done — off the list') and keep moving. If nothing matched you'll get a note; own it then.";
+          },
+          // a correction rewrites the memory in place — the doc keeps its
+          // place in history but stops saying the wrong thing. Fire-and-
+          // forget like every save: the agent reacts to the change NOW
+          // and hears back only if something needs its voice — a rewrite
+          // that takes four seconds must never cost four seconds of air.
+          edit_memory: ({ about, correction }: { about: string; correction: string }) => {
+            const id = ++seq.current;
+            setActivity((a) => [...a, { id, label: "amending a memory" }]);
+            pushCard({ id, kind: "filed", status: "loading", text: correction, amended: true, ttl: 8_000 });
+            const note = (text: string) => {
+              try {
+                conversationRef.current.sendContextualUpdate(text);
+              } catch {}
+            };
+            void (async () => {
+              try {
+                const res = await fetch("/api/amend", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ query: about, correction }),
                 });
-                data = await res.json().catch(() => ({}));
-              } catch {
+                const data: {
+                  after?: string;
+                  candidates?: string[];
+                  error?: string;
+                  envelope?: EnvelopePayload;
+                } = await res.json().catch(() => ({}));
+                if (res.status === 409) {
+                  // too fresh to rewrite — file the correction as its own
+                  // memory instead; the newest telling wins at read time.
+                  // No agent involvement: the recovery is deterministic.
+                  const d = await postJson("/api/capture", {
+                    content: correction,
+                    kind: "memory",
+                    source: "recall-voice",
+                  }).catch(() => null);
+                  const e = d?.envelope as EnvelopePayload | undefined;
+                  if (e) updateCard(id, { status: "ready", text: e.text ?? correction, envelope: toFiled(e) });
+                  else updateCard(id, { status: "error" });
+                  return;
+                }
+                if (res.status === 404) {
+                  dismissCard(id);
+                  note(
+                    data.candidates?.length
+                      ? `IMPORTANT — that correction did NOT apply: no memory matched confidently. Closest: ${data.candidates
+                          .slice(0, 3)
+                          .join(" | ")}. Tell the user you're not sure which one they meant and ask — then edit_memory again with more specific words.`
+                      : "IMPORTANT — that correction did NOT apply: nothing matched. Ask the user what exactly should change, or save it fresh with add_memory.",
+                  );
+                  return;
+                }
+                if (!res.ok) throw new Error(data.error ?? "engine error");
+                const e = data.envelope;
+                updateCard(id, {
+                  status: "ready",
+                  text: e?.text ?? data.after ?? correction,
+                  envelope: e ? toFiled(e) : undefined,
+                });
+              } catch (err) {
                 updateCard(id, { status: "error" });
-                return "The amend failed — the engine didn't answer. Say so briefly and move on.";
+                note(
+                  `IMPORTANT — that correction FAILED to apply (${
+                    err instanceof Error ? err.message : "engine error"
+                  }). Tell the user it didn't stick and offer to try again.`,
+                );
+              } finally {
+                setActivity((a) => a.filter((x) => x.id !== id));
               }
-              if (res.status === 409) {
-                dismissCard(id);
-                return `That memory is seconds old and still filing — it can't be rewritten yet. Save the corrected version with add_memory instead (the newest telling wins): "${correction}"`;
-              }
-              if (res.status === 404) {
-                dismissCard(id);
-                return data.candidates?.length
-                  ? `No memory matches confidently enough to edit. Closest:\n${data.candidates
-                      .map((c) => `- ${c}`)
-                      .join("\n")}\nAsk which one they mean, then call edit_memory again with more specific words.`
-                  : "No memory matches that. If they told you it moments ago it may still be filing — save the corrected version with add_memory (newest telling wins). Otherwise ask what exactly should change.";
-              }
-              if (!res.ok) {
-                updateCard(id, { status: "error" });
-                return `The amend failed (${data.error ?? "engine error"}). Say so briefly.`;
-              }
-              const e = data.envelope;
-              updateCard(id, {
-                status: "ready",
-                text: e?.text ?? data.after ?? correction,
-                envelope: e ? toFiled(e) : undefined,
-              });
-              return `Amended. It said: "${data.before}" — it now says: "${data.after}". React to the change in one short line; never recite both versions.`;
-            }),
+            })();
+            return "The rewrite is filing — react to the change itself in one short line ('Friday it is') and keep talking. Never announce the edit. If it fails to land you'll get a note; own it then.";
+          },
           get_briefing: () =>
             track("fetching briefing", async () => {
               const res = await fetch("/api/briefings");
@@ -611,13 +713,27 @@ function VoiceCore({
                 beats[beats.length - 1].date
               }. Call advance_story now. The tour flows on its own: narrate each chapter in one or two spoken sentences, then IMMEDIATELY call advance_story again — never pause to ask, never wait. Only the user speaking stops the flow.`;
             }),
-          // one chapter per call — the voice structurally cannot outrun
-          // the screen. Passing chapter jumps anywhere ("go back to the
-          // part about the lease").
+          // one chapter per call — and the call doesn't ANSWER until the
+          // current chapter has left the speakers. The LLM writes faster
+          // than the voice can speak; without this gate the constellation
+          // races three stars ahead of the narration. Passing chapter
+          // jumps anywhere ("go back to the part about the lease").
           advance_story: ({ chapter }: { chapter?: number } = {}) =>
             track("next chapter", async () => {
+              if (!storyRef.current) return "No story is open — call show_story first.";
+              const waitStart = Date.now();
+              while (isSpeakingRef.current && Date.now() - waitStart < 40_000) {
+                await new Promise((r) => setTimeout(r, 120));
+                if (!storyRef.current)
+                  return "The user closed the story overlay — the tour is over. Do not call advance_story again; pick the conversation back up naturally.";
+                if (lastUserSpokeAt.current > waitStart)
+                  return "The user started speaking — the story yields, and the screen did NOT advance. Answer them first; call advance_story again only when they want the tour to continue.";
+              }
+              // half a beat of air between chapters — the cinema
+              await new Promise((r) => setTimeout(r, 250));
               const s = storyRef.current;
-              if (!s) return "No story is open — call show_story first.";
+              if (!s)
+                return "The user closed the story overlay — the tour is over. Do not call advance_story again; pick the conversation back up naturally.";
               const jump =
                 typeof chapter === "number" && chapter >= 1 && chapter <= s.beats.length
                   ? chapter - 1
@@ -634,7 +750,7 @@ function VoiceCore({
               const b = s.beats[next];
               return `Chapter ${next + 1} of ${s.beats.length} — ${b.date}${
                 b.dated ? "" : " (timing approximate — dated by when they told you)"
-              }: ${b.text}\nNarrate this in one or two sentences, then IMMEDIATELY call advance_story again. Do not stop. Do not ask.`;
+              }: ${b.text}\nNarrate this in ONE or two SHORT sentences, then IMMEDIATELY call advance_story again — no filler between chapters, the screen paces itself to your voice. Do not stop. Do not ask.`;
             }),
           // the agent's own exit: the user said stop, or changed the subject
           end_story: () => {
