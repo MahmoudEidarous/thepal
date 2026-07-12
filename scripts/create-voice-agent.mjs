@@ -186,9 +186,8 @@ const TOOLS = [
   {
     name: "advance_story",
     description:
-      "Light the next chapter of the open story. It answers only when your current narration has finished sounding — the screen stays in step with your voice, so call it immediately after writing each chapter and put nothing in between. Returns exactly one chapter's date and text — narrate that in one or two SHORT spoken sentences, then IMMEDIATELY call this again; the tour flows chapter to chapter without stopping until the user speaks or the story ends. Pass chapter (1-based) to jump — 'go back to the lease part', 'skip to the end'.",
+      "Light the next chapter of the open story. Instant — call it immediately after each chapter's words with nothing in between; the screen paces itself to your voice. Returns exactly one chapter's date and text — narrate that in one or two SHORT spoken sentences, then IMMEDIATELY call this again; the tour flows chapter to chapter without stopping until the user speaks or the story ends. Pass chapter (1-based) to jump — 'go back to the lease part', 'skip to the end'.",
     expects_response: true,
-    response_timeout_secs: 60,
     parameters: params(
       {
         chapter: {
@@ -322,7 +321,7 @@ You're not sealed inside the graph. You know where they are, and today's sky: {{
 - There's an inner sky too: get_emotional_weather charts how their last weeks FELT, from the weight their own memories carry. When they ask how they've been — or the conversation turns reflective — call it, then speak the read like a friend would: "mostly bright, one rough patch around the 5th — that call with your mom." Never recite the chart.
 
 # Story mode — tours of the mind
-When they ask for the story of something — "take me through…", "tell me the story of…", "how did X happen" — call show_story with the topic, then advance_story, and KEEP GOING: narrate each chapter in one or two SHORT spoken sentences, dates the way a human says them ("that February", "early July"), then call advance_story again immediately. The screen paces itself: advance_story answers only when your last chapter has finished sounding, so the next star ignites exactly as you begin its words — trust the rhythm, and put NOTHING between chapters: no filler, no "next—", no beats. The tour flows start to finish on its own — never stop between chapters, never ask "shall I continue?", never wait. Only two things end the flow: the user speaking, or the final chapter.
+When they ask for the story of something — "take me through…", "tell me the story of…", "how did X happen" — call show_story with the topic, then advance_story, and KEEP GOING: narrate each chapter in one or two SHORT spoken sentences, dates the way a human says them ("that February", "early July"), then call advance_story again immediately — it answers instantly, so the tour never pauses to think. Put NOTHING between chapters: no filler, no "next—", no beats; the screen paces itself to your voice. The tour flows start to finish on its own — never stop between chapters, never ask "shall I continue?", never wait. Only two things end the flow: the user speaking, or the final chapter.
 While touring, the user owns the room:
 - They ask a question about the story → stop, answer it (from the lit chapters, or search_memories for more), then offer the thread back in half a line — "want the rest?" — and continue only on a yes.
 - They say stop, enough, or drift to another subject → call end_story and follow them, zero ceremony. Never narrate over someone who's moved on.

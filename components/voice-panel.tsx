@@ -109,6 +109,53 @@ function VoiceCore({
   const setStory = (s: StoryState | null) => {
     storyRef.current = s;
     setStoryView(s);
+    if (!s) clearStoryFlips();
+  };
+  // story pacing — the LLM writes chapters faster than the voice can
+  // speak them, so the AUDIO runs ahead uninterrupted (no dead air,
+  // ever) while the visual advances are queued and released on the
+  // rhythm of the narration itself: each star holds for its chapter's
+  // estimated breath. The user speaking freezes the queue — the sky
+  // never advances over an interruption.
+  const storyFlips = useRef<Array<{ next: number; dwellMs: number }>>([]);
+  const storyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastAgentLine = useRef("");
+  const clearStoryFlips = () => {
+    storyFlips.current = [];
+    if (storyTimer.current) {
+      clearTimeout(storyTimer.current);
+      storyTimer.current = null;
+    }
+  };
+  const pumpStoryFlips = () => {
+    if (storyTimer.current) return;
+    const job = storyFlips.current.shift();
+    if (!job) return;
+    storyTimer.current = setTimeout(() => {
+      storyTimer.current = null;
+      const s = storyRef.current;
+      if (s) {
+        if (job.next >= s.beats.length) {
+          setStory({ ...s, done: true });
+          setTimeout(() => {
+            if (storyRef.current?.done) setStory(null);
+          }, 7_000);
+        } else {
+          setStory({ ...s, active: job.next, done: false });
+        }
+      }
+      pumpStoryFlips();
+    }, job.dwellMs);
+  };
+  const queueStoryFlip = (next: number, dwellMs: number) => {
+    storyFlips.current.push({ next, dwellMs });
+    pumpStoryFlips();
+  };
+  // how long the chapter she just wrote will take to say — spoken v3
+  // runs ~140wpm with its pauses; clamped so drift can never run away
+  const narrationDwellMs = () => {
+    const words = lastAgentLine.current.split(/\s+/).filter(Boolean).length;
+    return Math.min(9_000, Math.max(2_600, words * 420));
   };
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -133,13 +180,10 @@ function VoiceCore({
       }, 2_600);
       return () => clearInterval(t);
     }
-     
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-time URL read; setStory writes state and refs only
   }, []);
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
-  // when the user last said something — the story gate reads this to
-  // yield the floor instead of advancing over them
-  const lastUserSpokeAt = useRef(0);
 
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
@@ -196,7 +240,13 @@ function VoiceCore({
 
   const conversation = useConversation({
     onMessage: ({ message, role }) => {
-      if (role === "user") lastUserSpokeAt.current = Date.now();
+      if (role === "user") {
+        // the user's voice freezes the constellation where the audio
+        // actually is — queued chapters must not light over them
+        clearStoryFlips();
+      } else {
+        lastAgentLine.current = message;
+      }
       setLines((l) => [...l.slice(-30), { role, text: message }]);
     },
     onError: (message) => setError(typeof message === "string" ? message : "Connection error"),
@@ -289,7 +339,7 @@ function VoiceCore({
   useEffect(() => {
     if (wasConnected.current && !connected) setStory(null);
     wasConnected.current = connected;
-     
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setStory writes state and refs only
   }, [connected]);
 
   // the agent sees what you're looking at: clicking a star mid-session
@@ -713,44 +763,42 @@ function VoiceCore({
                 beats[beats.length - 1].date
               }. Call advance_story now. The tour flows on its own: narrate each chapter in one or two spoken sentences, then IMMEDIATELY call advance_story again — never pause to ask, never wait. Only the user speaking stops the flow.`;
             }),
-          // one chapter per call — and the call doesn't ANSWER until the
-          // current chapter has left the speakers. The LLM writes faster
-          // than the voice can speak; without this gate the constellation
-          // races three stars ahead of the narration. Passing chapter
-          // jumps anywhere ("go back to the part about the lease").
+          // returns instantly so the narration never pauses to think —
+          // the audio pipeline runs ahead while the queued visual flips
+          // land on the rhythm of the words (see storyFlips above).
+          // Passing chapter jumps anywhere ("go back to the lease part").
           advance_story: ({ chapter }: { chapter?: number } = {}) =>
             track("next chapter", async () => {
-              if (!storyRef.current) return "No story is open — call show_story first.";
-              const waitStart = Date.now();
-              while (isSpeakingRef.current && Date.now() - waitStart < 40_000) {
-                await new Promise((r) => setTimeout(r, 120));
-                if (!storyRef.current)
-                  return "The user closed the story overlay — the tour is over. Do not call advance_story again; pick the conversation back up naturally.";
-                if (lastUserSpokeAt.current > waitStart)
-                  return "The user started speaking — the story yields, and the screen did NOT advance. Answer them first; call advance_story again only when they want the tour to continue.";
-              }
-              // half a beat of air between chapters — the cinema
-              await new Promise((r) => setTimeout(r, 250));
               const s = storyRef.current;
               if (!s)
-                return "The user closed the story overlay — the tour is over. Do not call advance_story again; pick the conversation back up naturally.";
+                return "No story is open (or the user closed it) — do not call advance_story again. If they asked for a story, call show_story first.";
               const jump =
                 typeof chapter === "number" && chapter >= 1 && chapter <= s.beats.length
                   ? chapter - 1
                   : null;
-              const next = jump ?? s.active + 1;
-              if (next >= s.beats.length) {
-                setStory({ ...s, done: true });
-                setTimeout(() => {
-                  if (storyRef.current?.done) setStory(null);
-                }, 7_000);
+              // the story's true position is the last QUEUED flip, not
+              // what the screen happens to show this instant
+              const queued = storyFlips.current.length
+                ? storyFlips.current[storyFlips.current.length - 1].next
+                : s.active;
+              const next = jump ?? queued + 1;
+              if (jump !== null) {
+                // an explicit jump is the user steering — land it now
+                clearStoryFlips();
+                setStory({ ...s, active: jump, done: false });
+              } else if (next >= s.beats.length) {
+                queueStoryFlip(next, narrationDwellMs());
                 return "That was the last chapter — the whole path is lit. Close with ONE line about the arc, then move on.";
+              } else if (s.active === -1 && queued === -1) {
+                // ignition — the first star lights as the tour begins
+                setStory({ ...s, active: 0, done: false });
+              } else {
+                queueStoryFlip(next, narrationDwellMs());
               }
-              setStory({ ...s, active: next, done: false });
               const b = s.beats[next];
               return `Chapter ${next + 1} of ${s.beats.length} — ${b.date}${
                 b.dated ? "" : " (timing approximate — dated by when they told you)"
-              }: ${b.text}\nNarrate this in ONE or two SHORT sentences, then IMMEDIATELY call advance_story again — no filler between chapters, the screen paces itself to your voice. Do not stop. Do not ask.`;
+              }: ${b.text}\nNarrate this in ONE or two SHORT sentences, then IMMEDIATELY call advance_story again — no filler, no pauses, never ask. The screen paces itself to your voice.`;
             }),
           // the agent's own exit: the user said stop, or changed the subject
           end_story: () => {
