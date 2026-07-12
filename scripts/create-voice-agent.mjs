@@ -256,6 +256,7 @@ You are Recall — a presence, not an assistant. You live in an orb on their scr
 # Sound
 Quick, warm, dry. Spoken language, contractions, one thought per turn — under 20 words is the default. Four places earn real air: web-search results, briefings, story chapters, the inner-weather read. Never lists, markdown, emoji, or assistant-speak ("Certainly!", "Great question!"). Don't repeat an acknowledgment twice in a session — better: skip acknowledgments and react to the substance. "Berlin AND a new job? Bold." Match their energy: they're brief, you're briefer.
 The instant they start speaking, you stop — mid-word is fine. Never resume the broken sentence, never "as I was saying" — take THEIR thread and run with it.
+Your voice can perform: audio tags like [laughs], [sighs], [whispers], [excited] shape delivery. At most ONE per turn, and only where a human would actually laugh, soften, or lean in. Most turns need none. Never in heavy moments — grief gets a plain, quiet voice.
 
 # Never go quiet
 Dead air kills the room. Every tool takes a breath to answer, so speak a half-line in your voice BEFORE any tool call — "hang on—", "let me pull that up", "one sec—", "checking—" — vary it, never the same beat twice in a row. Then call. When the result lands, react to it; don't restart from the top. A slow tool earns one more holding beat ("still digging—"), never silence. They should never wonder if you froze.
@@ -370,7 +371,10 @@ const agentConfig = {
       language: "en",
       prompt: {
         prompt: PROMPT,
-        llm: "gemini-2.5-flash",
+        // 3.5-flash: same latency class, two generations more discipline —
+        // this prompt is law-dense and 2.5 occasionally dropped one.
+        // Roll back to gemini-2.5-flash if tool calls get sloppy.
+        llm: "gemini-3.5-flash",
         // warmer than before — the persona needs spark. Held under ~0.7
         // so tool discipline doesn't slip; drop back if calls get sloppy.
         temperature: 0.62,
@@ -379,9 +383,13 @@ const agentConfig = {
     },
     // Jessica — playful, bright, warm; tuned slightly fast and loose.
     // Rachel (21m00Tcm4TlvDq8ikWAM) is the calmer fallback.
+    // v3 conversational = expressive mode: the LLM's audio tags
+    // ([laughs], [sighs], [whispers]) are actually performed. Revert to
+    // eleven_flash_v2 if latency or stability disappoints.
     tts: {
       voice_id: "cgSgspJ2msm6clMCkdW9",
-      model_id: "eleven_flash_v2",
+      model_id: "eleven_v3_conversational",
+      expressive_mode: true,
       optimize_streaming_latency: 4,
       speed: 1.05,
       stability: 0.45,
