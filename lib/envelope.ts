@@ -96,7 +96,7 @@ field rules:
 - salience 0..1: identity, relationships, health, hard deadlines high; trivia low.
 - entities: who and what this is about; alternate spellings as aliases of one entity. kind: person (a human) · place (city, neighborhood, venue, country) · thread (an ongoing storyline — a move, a pilot, an application, a course) · thing (org, product, object, team).
 - hints: 1-3 rephrasings or questions this memory answers, using DIFFERENT words than the original.
-- commitments: promises or hard deadlines buried INSIDE a longer message (notes, documents), each as a standalone statement with its due date resolved. Empty when there are none — or when the whole message is itself the commitment (then use type=commitment instead).`;
+- commitments: promises or hard deadlines buried INSIDE a longer message (notes, documents), each as a standalone statement with its due date resolved. One-time obligations only — recurring bills, rent, and routines are facts of life, never ledger items. Empty when there are none — or when the whole message is itself the commitment (then use type=commitment instead).`;
 
 async function callEnricher(model: string, prompt: string, timeoutMs: number): Promise<Envelope> {
   const { object } = await generateObject({
@@ -145,14 +145,23 @@ export async function enrich(
   // null a perfectly good envelope. Documents get even more room.
   const timeoutMs = rawContent.length > 1200 ? 40_000 : 25_000;
 
-  // hedged race: flash goes first; if it hasn't answered in 3.5s (or
-  // fails outright), pro launches and the first success wins. Sequential
-  // retry doubled the pain when a provider stalled — the hedge caps it.
+  // hedged race, quality-ordered. Utterances go flash-first (speed);
+  // documents go PRO-first — flash providers wobble on embedded-
+  // commitment extraction under the full schema (measured 2026-07-12:
+  // buried deadlines vanish 2 runs in 3), and nobody is waiting on the
+  // async document path. Either way the laggard launches on a timer (or
+  // instantly on failure) and the first success wins.
+  // a spoken utterance never carries a newline; notes and dropped files
+  // do — and they're where embedded commitments hide
+  const isDoc = rawContent.length > 800 || rawContent.includes("\n");
+  const firstModel = isDoc ? MODEL_PRO : MODEL_FLASH;
+  const secondModel = isDoc ? MODEL_FLASH : MODEL_PRO;
+  const hedgeMs = isDoc ? 8_000 : 3_500;
   return new Promise<Envelope | null>((resolve) => {
     let done = false;
-    let proStarted = false;
-    let flashFailed = false;
-    let proFailed = false;
+    let secondStarted = false;
+    let firstFailed = false;
+    let secondFailed = false;
     const finish = (v: Envelope) => {
       if (!done) {
         done = true;
@@ -169,23 +178,23 @@ export async function enrich(
         resolve(null);
       }
     };
-    const onProFail = (e: unknown) => {
-      proFailed = true;
-      if (flashFailed) giveUp(e);
+    const onSecondFail = (e: unknown) => {
+      secondFailed = true;
+      if (firstFailed) giveUp(e);
     };
-    const startPro = () => {
-      if (done || proStarted) return;
-      proStarted = true;
+    const startSecond = () => {
+      if (done || secondStarted) return;
+      secondStarted = true;
       clearTimeout(timer);
-      callEnricher(MODEL_PRO, prompt, timeoutMs).then(finish).catch(onProFail);
+      callEnricher(secondModel, prompt, timeoutMs).then(finish).catch(onSecondFail);
     };
-    callEnricher(MODEL_FLASH, prompt, timeoutMs)
+    callEnricher(firstModel, prompt, timeoutMs)
       .then(finish)
       .catch((e) => {
-        flashFailed = true;
-        if (proFailed) giveUp(e);
-        else startPro();
+        firstFailed = true;
+        if (secondFailed) giveUp(e);
+        else startSecond();
       });
-    const timer = setTimeout(startPro, 3_500);
+    const timer = setTimeout(startSecond, hedgeMs);
   });
 }
