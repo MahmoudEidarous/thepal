@@ -1179,116 +1179,147 @@ export default function Brain() {
             ) : (
               dayGroups.map((g) => (
                 <section key={g.day}>
-                  <h2 className="mb-3 font-mono text-[10.5px] uppercase tracking-[0.25em] text-zinc-500">
-                    {g.day}
-                  </h2>
-                  <div className="relative ml-[5px] flex flex-col gap-2.5 border-l border-white/[0.08] pl-5">
-                    {g.items.map((c) => {
+                  <div className="mb-4 flex items-center gap-4">
+                    <h2 className="font-mono text-[10px] uppercase tracking-[0.3em] text-zinc-500">
+                      {g.day}
+                    </h2>
+                    <div className="h-px flex-1 bg-gradient-to-r from-white/[0.09] to-transparent" />
+                  </div>
+                  {/* the spine: a luminous thread; each memory a star on it,
+                      its glow carrying the weight the envelope gave it */}
+                  <div className="relative ml-[5px] flex flex-col pl-6">
+                    <div
+                      aria-hidden
+                      className="absolute bottom-2 left-0 top-2 w-px bg-gradient-to-b from-white/[0.14] via-white/[0.05] to-transparent"
+                    />
+                    {g.items.map((c, idx) => {
                       const type = String(c.meta.type ?? "memory");
-                      const color = TYPE_COLORS[type] ?? TYPE_COLORS.memory;
-                      const salience =
-                        typeof c.meta.salience === "number" ? (c.meta.salience as number) : null;
+                      const closed = /^(Done|Cancelled):/.test(c.text);
+                      const cancelled = c.text.startsWith("Cancelled:");
+                      const archived =
+                        c.meta.status === "superseded" || c.meta.status === "cancelled";
+                      const color = closed
+                        ? cancelled
+                          ? "#8B96B3"
+                          : "#52C79A"
+                        : (TYPE_COLORS[type] ?? TYPE_COLORS.memory);
+                      const sal =
+                        typeof c.meta.salience === "number" ? (c.meta.salience as number) : 0.5;
                       const hints = hintsFor[c.id];
                       const long = c.text.length > 260;
                       const open = expanded[c.id];
-                      const entities =
-                        typeof c.meta.entities === "string"
-                          ? (c.meta.entities as string)
-                              .split(", ")
-                              .map((e) => e.split("#")[0].split("/")[0])
-                              .filter(Boolean)
-                          : [];
-                      const metaBits: string[] = [];
-                      if (typeof c.meta.provenance === "string" && c.meta.provenance !== "stated")
-                        metaBits.push(c.meta.provenance as string);
-                      if (
-                        typeof c.meta.storyDate === "string" &&
-                        c.meta.storyDate !== c.meta.due
-                      )
-                        metaBits.push(`about ${c.meta.storyDate as string}`);
-                      if (typeof c.meta.due === "string")
-                        metaBits.push(
-                          `due ${/^\d{4}-\d{2}-\d{2}$/.test(c.meta.due as string) ? prettyDate(c.meta.due as string) : (c.meta.due as string)}`,
-                        );
-                      if (c.meta.redacted === true) metaBits.push("secrets stripped");
+                      const entities = [
+                        ...new Set(
+                          typeof c.meta.entities === "string"
+                            ? (c.meta.entities as string)
+                                .split(", ")
+                                .map((e) => e.split("#")[0].split("/")[0])
+                                .filter(Boolean)
+                            : [],
+                        ),
+                      ];
+                      const dot = 6 + sal * 4;
                       return (
                         <article
                           key={c.id}
-                          className="relative rounded-xl border border-white/[0.08] bg-white/[0.035] px-4 py-3.5"
+                          className="row-in group relative -mx-3 rounded-2xl px-3 py-3 transition-colors duration-300 hover:bg-white/[0.025]"
+                          style={{ animationDelay: `${Math.min(idx * 45, 450)}ms` }}
                         >
                           <span
                             aria-hidden
-                            className="absolute -left-[25.5px] top-[19px] size-[9px] rounded-full"
-                            style={{ background: color, boxShadow: `0 0 8px 1px ${color}55` }}
+                            className="absolute top-[19px] rounded-full transition-shadow duration-300"
+                            style={{
+                              left: -24.5 - dot / 2,
+                              width: dot,
+                              height: dot,
+                              background: archived ? "transparent" : color,
+                              border: archived ? `1px solid ${color}88` : "none",
+                              boxShadow: archived
+                                ? "none"
+                                : `0 0 ${Math.round(5 + sal * 12)}px ${Math.round(1 + sal * 2.5)}px ${color}${sal >= 0.7 ? "66" : "3d"}`,
+                              opacity: archived ? 0.6 : 0.75 + sal * 0.25,
+                            }}
                           />
-                          <div className="flex items-baseline gap-2.5">
+                          <div className="flex items-baseline gap-x-2.5">
                             <span
-                              className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em]"
-                              style={{ color }}
+                              className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.22em]"
+                              style={{ color, opacity: archived ? 0.55 : 0.95 }}
                             >
-                              {type}
+                              {closed ? (cancelled ? "called off" : "closed") : type}
                             </span>
-                            {metaBits.length > 0 && (
-                              <span className="truncate text-[11px] text-zinc-500">
-                                {metaBits.join(" · ")}
+                            {archived && (
+                              <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600">
+                                {c.meta.status === "superseded" ? "superseded ↻" : "cancelled"}
                               </span>
                             )}
-                            <span className="ml-auto flex shrink-0 items-center gap-2.5">
-                              {salience !== null && (
-                                <span
-                                  className="h-[3px] w-8 overflow-hidden rounded-full bg-white/10"
-                                  title={`weight ${salience}`}
-                                >
-                                  <span
-                                    className="block h-full rounded-full"
-                                    style={{
-                                      width: `${Math.round(salience * 100)}%`,
-                                      background: color,
-                                    }}
-                                  />
+                            {typeof c.meta.storyDate === "string" &&
+                              c.meta.storyDate !== c.meta.due && (
+                                <span className="truncate font-mono text-[9.5px] tracking-[0.1em] text-zinc-600 tabular-nums">
+                                  about {c.meta.storyDate as string}
                                 </span>
                               )}
-                              <span className="text-[10.5px] text-zinc-600">
-                                {c.createdAt ? timeAgo(c.createdAt) : ""}
+                            {typeof c.meta.provenance === "string" &&
+                              c.meta.provenance !== "stated" && (
+                                <span className="shrink-0 font-mono text-[9.5px] tracking-[0.1em] text-zinc-600">
+                                  {c.meta.provenance as string}
+                                </span>
+                              )}
+                            {c.meta.redacted === true && (
+                              <span className="shrink-0 font-mono text-[9.5px] tracking-[0.1em] text-zinc-600">
+                                secrets stripped
                               </span>
+                            )}
+                            <span className="ml-auto shrink-0 font-mono text-[9.5px] tracking-[0.1em] text-zinc-600 tabular-nums">
+                              {c.createdAt ? timeAgo(c.createdAt) : ""}
                             </span>
                           </div>
-                          <p className="mt-2 text-[14px] leading-relaxed text-zinc-200">
+                          <p
+                            className={`mt-1.5 text-[14.5px] font-light leading-relaxed ${
+                              archived ? "text-zinc-500" : "text-zinc-100"
+                            }`}
+                          >
                             {long && !open ? `${c.text.slice(0, 260)}…` : c.text}
                             {long && (
                               <button
-                                onClick={() =>
-                                  setExpanded((x) => ({ ...x, [c.id]: !open }))
-                                }
+                                onClick={() => setExpanded((x) => ({ ...x, [c.id]: !open }))}
                                 className="ml-1.5 text-[12px] text-zinc-500 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-300"
                               >
                                 {open ? "less" : "more"}
                               </button>
                             )}
                           </p>
-                          {(entities.length > 0 || hints !== undefined || true) && (
-                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-                              {entities.map((e) => (
-                                <span key={e} className="text-[11.5px] text-zinc-500">
-                                  ◦ {e}
-                                </span>
-                              ))}
-                              {hints === undefined ? (
-                                <button
-                                  onClick={() => revealHints(c)}
-                                  className="text-[11.5px] text-zinc-600 transition-colors hover:text-indigo-300"
-                                >
-                                  also answers ›
-                                </button>
-                              ) : hints.length === 0 ? (
-                                <span className="text-[11.5px] text-zinc-700">no hints</span>
-                              ) : null}
-                            </div>
-                          )}
+                          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                            {typeof c.meta.due === "string" && !archived && !closed && (
+                              <span className="flex items-center rounded-full bg-amber-300/[0.08] px-2 py-[2px] font-mono text-[9px] tracking-[0.08em] text-amber-200/80 ring-1 ring-inset ring-amber-300/[0.16] tabular-nums">
+                                due{" "}
+                                {/^\d{4}-\d{2}-\d{2}$/.test(c.meta.due as string)
+                                  ? prettyDate(c.meta.due as string)
+                                  : (c.meta.due as string)}
+                              </span>
+                            )}
+                            {entities.map((e) => (
+                              <span
+                                key={e}
+                                className="rounded-full bg-white/[0.04] px-2 py-[2px] font-mono text-[9px] tracking-[0.06em] text-zinc-500 ring-1 ring-inset ring-white/[0.06]"
+                              >
+                                {e}
+                              </span>
+                            ))}
+                            {hints === undefined ? (
+                              <button
+                                onClick={() => revealHints(c)}
+                                className="font-mono text-[9.5px] tracking-[0.08em] text-zinc-700 opacity-0 transition-all hover:text-indigo-300 focus-visible:opacity-100 group-hover:opacity-100"
+                              >
+                                also answers ›
+                              </button>
+                            ) : hints.length === 0 ? (
+                              <span className="font-mono text-[9.5px] text-zinc-700">no hints</span>
+                            ) : null}
+                          </div>
                           {hints !== undefined && hints.length > 0 && (
-                            <div className="mt-2 flex flex-col gap-1 border-t border-white/[0.05] pt-2">
+                            <div className="mt-2 flex flex-col gap-1 border-l border-white/[0.07] pl-3">
                               {hints.map((h, i) => (
-                                <p key={i} className="text-[12.5px] italic text-zinc-400">
+                                <p key={i} className="text-[12px] italic leading-relaxed text-zinc-400">
                                   “{h}”
                                 </p>
                               ))}
