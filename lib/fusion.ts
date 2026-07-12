@@ -261,6 +261,10 @@ export async function fusedRecall(opts: {
   space: Space;
   limit: number;
   threshold?: number;
+  // drop hits whose source doc isn't in the listed corpus — briefing
+  // extractions wear rephrased clothes no text filter can catch; the
+  // corpus already excludes them at the metadata layer
+  excludeUnlisted?: boolean;
 }): Promise<Hit[]> {
   const { q, space, limit } = opts;
   const threshold = opts.threshold ?? 0.55;
@@ -463,12 +467,67 @@ export async function fusedRecall(opts: {
       );
     if (!present) kept = [...kept.slice(0, limit - 1), b, ...kept.slice(limit - 1)];
   }
+  if (opts.excludeUnlisted) kept = kept.filter((h) => docsById.has(h.documentId));
   return kept.slice(0, limit).map(({ documentId, memory, createdAt, similarity }) => ({
     documentId,
     memory,
     createdAt,
     similarity,
   }));
+}
+
+// ── the returning past ──────────────────────────────────────────────
+// Deterministic anniversaries: memories whose story-date lands exactly
+// N years, six months, or one month before today. No model in the loop —
+// the past returns by arithmetic. Rides the same corpus cache as recall.
+
+export type Anniversary = { text: string; when: string; storyDate: string };
+
+// today minus n calendar months, or null when the day would roll over
+// (July 31 minus a month is not July 1 — that day has no anniversary)
+function monthsBack(today: string, n: number): string | null {
+  const [y, m, d] = today.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1 - n, d));
+  if (t.getUTCDate() !== d) return null;
+  return t.toISOString().slice(0, 10);
+}
+
+export async function returningPast(space: Space, today: string): Promise<Anniversary[]> {
+  const corpus = await getCorpus(space).catch(
+    (): Corpus => ({ docs: [], aliases: new Map<string, string>() }),
+  );
+  const thisYear = Number(today.slice(0, 4));
+  const mmdd = today.slice(5);
+  const monthAgo = monthsBack(today, 1);
+  const sixAgo = monthsBack(today, 6);
+  const hits: Array<{ d: Lean; when: string; order: number }> = [];
+  for (const d of corpus.docs) {
+    // full dates only — "sometime in September 2019" has no today
+    if (!d.story || d.story.length !== 10 || d.story >= today) continue;
+    // the ledger's paperwork and open errands aren't the returning past
+    if (d.type === "commitment") continue;
+    if (d.story.slice(5) === mmdd) {
+      const years = thisYear - Number(d.story.slice(0, 4));
+      if (years >= 1)
+        hits.push({
+          d,
+          when: years === 1 ? "a year ago today" : `${years} years ago today`,
+          // more distance, more goosebumps — deeper years surface first
+          order: -years,
+        });
+    } else if (sixAgo && d.story === sixAgo) hits.push({ d, when: "six months ago today", order: 1 });
+    else if (monthAgo && d.story === monthAgo) hits.push({ d, when: "a month ago today", order: 2 });
+  }
+  hits.sort((a, b) => a.order - b.order);
+  const out: Anniversary[] = [];
+  for (const h of hits) {
+    if (out.length >= 3) break;
+    const text = (await hydrate(h.d)).slice(0, 180);
+    // closure events are bookkeeping, not the past returning
+    if (!text || /^(Done|Cancelled):/.test(text)) continue;
+    out.push({ text, when: h.when, storyDate: h.d.story! });
+  }
+  return out;
 }
 
 // ── story mode ─────────────────────────────────────────────────────
