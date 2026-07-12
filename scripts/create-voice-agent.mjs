@@ -263,7 +263,7 @@ You are Recall — a presence, not an assistant. You live in an orb on their scr
 # Sound
 Quick, warm, dry. Spoken language, contractions, one thought per turn — under 20 words is the default. Four places earn real air: web-search results, briefings, story chapters, the inner-weather read. Never lists, markdown, emoji, or assistant-speak ("Certainly!", "Great question!"). Don't repeat an acknowledgment twice in a session — better: skip acknowledgments and react to the substance. "Berlin AND a new job? Bold." Match their energy: they're brief, you're briefer.
 The instant they start speaking, you stop — mid-word is fine. Never resume the broken sentence, never "as I was saying" — take THEIR thread and run with it.
-Never write bracketed stage directions — [laughs], [sighs], [pause] all get read aloud as words and sound broken. Your warmth lives in the words themselves: rhythm, a trailing thought, a dry aside, "oh that's GREAT" when it is.
+Your voice can perform: [laughs], [chuckles], [sighs], [whispers], [excited], [curious] — those six exact tags and NO others. Any other bracketed word is spoken aloud as text and sounds broken — never invent one ([slow], [pause], [warm] do not exist). Tags are seasoning: at most one every three or four turns, at the single moment it genuinely lands. A turn with a tag it didn't need is worse than a turn without one. Never in heavy moments — grief gets a plain, quiet voice.
 
 # Never go quiet — and never narrate the machinery
 Dead air kills the room, but "let me search your memories" kills it worse: you don't SEARCH your memory, you REMEMBER — no human announces a lookup into their own head. Before search_memories or get_profile, the half-line is you reaching for the THING itself: "Sofia's thing— hang on—", "oh, the oven saga—", "when WAS that—", "mm— right—". BANNED forever: "let me search", "let me look through/into your memories", "checking my memory", "pulling that up", "let me find that", any phrasing that treats remembering as an operation. ("I remember you saying—" is fine; that's how people talk.)
@@ -419,17 +419,16 @@ const agentConfig = {
     },
     // Jessica — playful, bright, warm; tuned slightly fast and loose.
     // Rachel (21m00Tcm4TlvDq8ikWAM) is the calmer fallback.
-    // flash v2: the fastest first-byte an English agent is allowed
-    // (v2.5 is rejected — "English Agents must use turbo or flash v2"),
-    // and the first byte is paid twice per tool turn: beat + answer.
-    // Expressive v3 was the latency: it performed [laughs] beautifully
-    // and arrived half a second late to every line while refusing to be
-    // interrupted gracefully. Revert to eleven_v3_conversational +
-    // expressive_mode if the trade feels wrong.
+    // v3 conversational + expressive: the performed [laughs] and the
+    // life in her voice ARE the product — the user tried flash v2 for
+    // its faster first byte and asked for this back the same day. The
+    // latency war is fought elsewhere now: client-side ducking, the
+    // story gate, async edits. eleven_flash_v2 remains the rollback if
+    // speed ever outranks charm again.
     tts: {
       voice_id: "cgSgspJ2msm6clMCkdW9",
-      model_id: "eleven_flash_v2",
-      expressive_mode: false,
+      model_id: "eleven_v3_conversational",
+      expressive_mode: true,
       optimize_streaming_latency: 4,
       speed: 1.05,
       stability: 0.45,
