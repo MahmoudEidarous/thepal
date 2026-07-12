@@ -63,6 +63,9 @@ export type SenseCard =
       amended?: boolean;
       // a reschedule retired an open commitment — what it used to say
       replaces?: string;
+      // this telling collides with an older memory — annotated, never
+      // rewritten: the old version stays as history
+      updates?: { text: string; told: string | null };
       error?: string;
       ttl?: number;
     }
@@ -689,6 +692,17 @@ function FiledBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "file
           <span className="truncate line-through decoration-zinc-600">{card.replaces}</span>
         </p>
       )}
+      {/* the system noticed, out loud: this telling updates an older
+          memory. No strikethrough — the old version stays as history. */}
+      {card.updates && (
+        <p className="mt-2 flex items-baseline gap-1.5 px-4 font-mono text-[9.5px] tracking-[0.06em] text-zinc-500">
+          <span className="shrink-0 uppercase tracking-[0.18em] text-sky-300/70">updates</span>
+          <span className="truncate">“{card.updates.text}”</span>
+          {card.updates.told && (
+            <span className="shrink-0 text-zinc-600">told {ago(card.updates.told)}</span>
+          )}
+        </p>
+      )}
       <div className="pb-3.5" />
     </>
   );
@@ -976,6 +990,10 @@ export const DEMO_CARDS: SenseCard[] = [
         { name: "Sonnenallee", kind: "place" },
       ],
       commitments: [],
+    },
+    updates: {
+      text: "Dinner with Layla on Thursday at the Greek place",
+      told: new Date(Date.now() - 3 * 86_400_000).toISOString(),
     },
   },
   {

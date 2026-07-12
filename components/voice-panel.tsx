@@ -394,7 +394,7 @@ function VoiceCore({
       // what you owe and what it must never suggest, before you speak.
       // Location + today's sky resolve in the same breath, so "how's the
       // weather?" costs zero tool calls.
-      const [res, agendaData, pinnedData, briefingData, senses] = await Promise.all([
+      const [res, agendaData, pinnedData, briefingData, annivData, senses] = await Promise.all([
         fetch("/api/voice/signed-url"),
         fetch("/api/agenda")
           .then((r) => (r.ok ? r.json() : { commitments: [] }))
@@ -405,6 +405,9 @@ function VoiceCore({
         fetch("/api/briefings")
           .then((r) => (r.ok ? r.json() : { briefings: [] }))
           .catch(() => ({ briefings: [] })),
+        fetch("/api/anniversaries")
+          .then((r) => (r.ok ? r.json() : { anniversaries: [] }))
+          .catch(() => ({ anniversaries: [] })),
         (async () => {
           const p = await locate();
           if (!p) return null;
@@ -439,6 +442,14 @@ function VoiceCore({
       const boundariesText = (pinnedData.pinned as string[]).length
         ? (pinnedData.pinned as string[]).map((p) => `- ${p}`).join("\n")
         : "none";
+
+      // the returning past — deterministic story-date anniversaries,
+      // carried in so "a year ago today—" costs zero tool calls
+      type Anniv = { text: string; when: string; storyDate: string };
+      const annivText =
+        ((annivData.anniversaries ?? []) as Anniv[])
+          .map((a) => `- ${a.when} (${a.storyDate}): ${a.text}`)
+          .join("\n") || "none";
 
       // where they are + today's sky, carried in the agent's pocket
       const placeText = senses?.p
@@ -513,6 +524,7 @@ function VoiceCore({
           agenda: agendaText,
           boundaries: boundariesText,
           briefing: briefingText,
+          anniversaries: annivText,
           place: placeText,
           opening,
         },
@@ -568,13 +580,29 @@ function VoiceCore({
                   updateCard(id, { status: "error" });
                   return;
                 }
+                const conflict = d.conflict as
+                  | { text: string; told?: string | null }
+                  | undefined;
                 updateCard(id, {
                   status: "ready",
                   text: e.text ?? content,
                   envelope: toFiled(e),
                   // a reschedule quietly retired the old terms — show it
                   ...(typeof d.superseded === "string" ? { replaces: d.superseded } : {}),
+                  // "this changes what I knew" — the collision, annotated
+                  ...(conflict?.text
+                    ? { updates: { text: conflict.text, told: conflict.told ?? null } }
+                    : {}),
                 });
+                if (conflict?.text) {
+                  try {
+                    conversationRef.current.sendContextualUpdate(
+                      `What they just said UPDATES something older you knew: "${conflict.text}"${
+                        conflict.told ? ` (told ${String(conflict.told).slice(0, 10)})` : ""
+                      }. The old version stays as history; the newest telling is the truth now. If the flip is interesting, ONE short grinning line ("wasn't this X last week?") — if it's mundane, stay quiet.`,
+                    );
+                  } catch {}
+                }
               })
               .catch((err) => {
                 updateCard(id, { status: "error" });
