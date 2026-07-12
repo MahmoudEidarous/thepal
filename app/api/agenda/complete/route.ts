@@ -1,7 +1,7 @@
-import { supermemory, smRequest, spaceTag } from "@/lib/supermemory";
+import { supermemory, spaceTag } from "@/lib/supermemory";
 import { apiError, asSpace } from "@/lib/validate";
 import { localToday } from "@/lib/envelope";
-import { openCommitments } from "@/lib/ledger";
+import { openCommitments, setLedgerStatus } from "@/lib/ledger";
 
 // Done things stay done: closing a commitment PATCHes its metadata to
 // status=done (the ledger forgets nothing) and writes a dated
@@ -40,11 +40,18 @@ export async function POST(request: Request) {
       );
     }
     const today = localToday();
-    await smRequest("PATCH", `/v3/documents/${match.id}`, {
-      metadata: { ...match.metadata, status: "done", completedAt: today },
-    });
+    // done and cancelled both close the item; only the history differs —
+    // finished things earn a Done event, scrapped plans a Cancelled one.
+    // Neither is ever a deletion.
+    const outcome = body.outcome === "cancelled" ? "cancelled" : "done";
+    // setLedgerStatus handles the engine's sharp edges: settle races and
+    // failed-immutable docs (which it rebirths rather than losing)
+    await setLedgerStatus(tag, match.id, { status: outcome, completedAt: today });
     await supermemory.add({
-      content: `Done: ${match.content} (completed ${today})`,
+      content:
+        outcome === "done"
+          ? `Done: ${match.content} (completed ${today})`
+          : `Cancelled: ${match.content} (called off ${today})`,
       containerTag: tag,
       metadata: {
         source: "recall-ledger",
@@ -54,7 +61,7 @@ export async function POST(request: Request) {
         salience: 0.55,
       },
     });
-    return Response.json({ completed: match.content, due: match.due, on: today });
+    return Response.json({ completed: match.content, due: match.due, on: today, outcome });
   } catch (err) {
     return apiError(err);
   }
