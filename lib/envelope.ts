@@ -44,6 +44,11 @@ export const EnvelopeSchema = z.object({
   commitments: z
     .array(z.object({ content: z.string(), due: z.string().nullable() }))
     .max(5),
+  // when the message reschedules/replaces one of the OPEN ledger items
+  // shown to the enricher: that item's number. The reschedule pattern —
+  // "the Sofia meeting is tomorrow now" must retire the old telling, or
+  // the ledger nags twice.
+  supersedes: z.number().nullable(),
 });
 
 export type Envelope = z.infer<typeof EnvelopeSchema>;
@@ -96,7 +101,8 @@ field rules:
 - salience 0..1: identity, relationships, health, hard deadlines high; trivia low.
 - entities: who and what this is about; alternate spellings as aliases of one entity. kind: person (a human) · place (city, neighborhood, venue, country) · thread (an ongoing storyline — a move, a pilot, an application, a course) · thing (org, product, object, team).
 - hints: 1-3 rephrasings or questions this memory answers, using DIFFERENT words than the original.
-- commitments: promises or hard deadlines buried INSIDE a longer message (notes, documents), each as a standalone statement with its due date resolved. One-time obligations only — recurring bills, rent, and routines are facts of life, never ledger items. Empty when there are none — or when the whole message is itself the commitment (then use type=commitment instead).`;
+- commitments: promises or hard deadlines buried INSIDE a longer message (notes, documents), each as a standalone statement with its due date resolved. One-time obligations only — recurring bills, rent, and routines are facts of life, never ledger items. Empty when there are none — or when the whole message is itself the commitment (then use type=commitment instead).
+- supersedes: when an "open ledger" list is provided and the message RESCHEDULES or REPLACES one of those items — same errand, new day/time/terms — output that item's number. It must be the same task: a different errand for the same person is NEVER a supersede ("send Brandt the contract" does not supersede "send Brandt the one-pager"). null when no list is given, or nothing matches, or the message merely mentions an item.`;
 
 async function callEnricher(model: string, prompt: string, timeoutMs: number): Promise<Envelope> {
   const { object } = await generateObject({
@@ -131,14 +137,32 @@ export function localToday(): string {
   return new Date().toLocaleDateString("en-CA");
 }
 
+// a note that smells of deadlines but enveloped with zero commitments
+// is the enricher's one measured flake (~1 run in 4) — worth one
+// second opinion, and only then. The nose is wide on purpose: any
+// concrete date or obligation word ("on July 20th", "due", "cannot
+// miss") counts — a false sniff costs one cheap extra call.
+const DEADLINE_SMELL =
+  /\b(due|deadline|cannot miss|must not miss|by (mon|tues|wednes|thurs|fri|satur|sun)[a-z]*)\b|\b(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.? \d{1,2}(st|nd|rd|th)?\b|\d{4}-\d{2}-\d{2}/i;
+
 export async function enrich(
   rawContent: string,
   source: string,
   today: string,
+  openLedger: string[] = [],
 ): Promise<Envelope | null> {
   const [y, m, d] = today.split("-").map(Number);
   const weekday = WEEKDAYS[new Date(y, m - 1, d).getDay()];
-  const prompt = `today: ${today} (${weekday})\nsource: ${source}\n\nmessage:\n${rawContent.slice(0, 6000)}`;
+  // the enricher sees the open ledger so a retelling can retire the item
+  // it replaces — semantic matching where similarity thresholds can't
+  // tell "the Sofia meeting moved" from "a different errand for Sofia"
+  const ledgerBlock = openLedger.length
+    ? `\nopen ledger:\n${openLedger
+        .slice(0, 20)
+        .map((c, i) => `${i + 1}. ${c.slice(0, 110)}`)
+        .join("\n")}\n`
+    : "";
+  const prompt = `today: ${today} (${weekday})\nsource: ${source}\n${ledgerBlock}\nmessage:\n${rawContent.slice(0, 6000)}`;
   // some inputs are deterministically slow to envelope (dense notes with
   // embedded commitments) — the budget must outlast them. Typical calls
   // finish in 3-7s; the ceiling only matters when it would otherwise
@@ -157,7 +181,7 @@ export async function enrich(
   const firstModel = isDoc ? MODEL_PRO : MODEL_FLASH;
   const secondModel = isDoc ? MODEL_FLASH : MODEL_PRO;
   const hedgeMs = isDoc ? 8_000 : 3_500;
-  return new Promise<Envelope | null>((resolve) => {
+  const raceOnce = () => new Promise<Envelope | null>((resolve) => {
     let done = false;
     let secondStarted = false;
     let firstFailed = false;
@@ -197,4 +221,50 @@ export async function enrich(
       });
     const timer = setTimeout(startSecond, hedgeMs);
   });
+
+  // policy, enforced deterministically: recurring bills and routines are
+  // never ledger items. The models agree ~half the time; the filter
+  // agrees always.
+  const RECURRING =
+    /\b(each|every|per)\s+(month|week|day|year|morning|evening)\b|\b(monthly|weekly|yearly|annually)\b/i;
+  const dropRecurring = (e: Envelope | null): Envelope | null =>
+    e ? { ...e, commitments: e.commitments.filter((c) => !RECURRING.test(c.content)) } : e;
+
+  const first = dropRecurring(await raceOnce());
+  // the one measured flake: a deadline-smelling note enveloped with an
+  // empty commitments[] (~1 run in 4). Under the full 11-field schema
+  // BOTH models sometimes drop buried deadlines; under a minimal schema
+  // neither does (measured 3/3). So the second opinion asks exactly one
+  // question with exactly two fields.
+  if (
+    first &&
+    isDoc &&
+    first.type !== "commitment" &&
+    first.commitments.length === 0 &&
+    DEADLINE_SMELL.test(rawContent)
+  ) {
+    try {
+      const { object } = await generateObject({
+        model: openrouter(MODEL_PRO, {
+          extraBody: { provider: { sort: "throughput" }, reasoning: { enabled: false } },
+        }),
+        schema: z.object({
+          commitments: z
+            .array(z.object({ content: z.string(), due: z.string().nullable() }))
+            .max(5),
+        }),
+        system:
+          "Find the one-time promises and hard deadlines buried in this note — appointments, submissions, registrations, each as one standalone statement with its due date resolved against today (YYYY-MM-DD, null if undated). Recurring bills, rent, and routines are facts of life, never commitments. Empty array if there are truly none.",
+        prompt: `today: ${today}\n\nnote:\n${rawContent.slice(0, 6000)}`,
+        temperature: 0,
+        maxOutputTokens: 800,
+        abortSignal: AbortSignal.timeout(20_000),
+      });
+      const found = object.commitments.filter((c) => !RECURRING.test(c.content));
+      if (found.length > 0) return { ...first, commitments: found };
+    } catch {
+      // the first envelope stands — words are already safe
+    }
+  }
+  return first;
 }

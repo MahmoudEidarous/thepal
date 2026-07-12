@@ -2,6 +2,7 @@ import { supermemory, spaceTag } from "@/lib/supermemory";
 import { apiError, asSpace } from "@/lib/validate";
 import { enrich, localToday, redactSecrets, type Envelope } from "@/lib/envelope";
 import { invalidateCorpus } from "@/lib/fusion";
+import { openCommitments, setLedgerStatus } from "@/lib/ledger";
 
 // The Writer. Every memory — spoken, typed, or dropped as a file —
 // passes through here once, gets its secrets stripped locally, and is
@@ -21,7 +22,17 @@ export async function POST(request: Request) {
 
     const today = localToday();
     const source = typeof body.source === "string" ? body.source : "recall-app";
-    const envelope: Envelope | null = await enrich(safe, source, today);
+    // the open ledger rides along so the enricher can spot a reschedule —
+    // "the Sofia meeting is tomorrow now" retires the old telling instead
+    // of nagging beside it
+    const space = asSpace(body.space);
+    const ledger = await openCommitments(spaceTag(space)).catch(() => []);
+    const envelope: Envelope | null = await enrich(
+      safe,
+      source,
+      today,
+      ledger.map((c) => c.content),
+    );
 
     // eval harness: return the envelope without persisting anything
     if (body.dryRun === true) {
@@ -43,7 +54,7 @@ export async function POST(request: Request) {
 
     const doc = await supermemory.add({
       content,
-      containerTag: spaceTag(asSpace(body.space)),
+      containerTag: spaceTag(space),
       metadata: {
         source,
         type: envelope?.type ?? kindFallback,
@@ -74,6 +85,27 @@ export async function POST(request: Request) {
           : {}),
       },
     });
+    // the enricher named an open commitment this telling replaces — a
+    // reschedule retires the old terms. The ledger nags exactly once.
+    let superseded: string | null = null;
+    const supIdx = envelope?.supersedes;
+    if (
+      typeof supIdx === "number" &&
+      supIdx >= 1 &&
+      supIdx <= ledger.length &&
+      (envelope?.type === "commitment" || kindFallback === "commitment")
+    ) {
+      const old = ledger[supIdx - 1];
+      // setLedgerStatus rides the engine's sharp edges: settle races and
+      // failed-immutable docs (rebirthed, never lost)
+      await setLedgerStatus(spaceTag(space), old.id, {
+        status: "superseded",
+        supersededAt: today,
+        supersededBy: doc.id,
+      }).catch(() => {});
+      superseded = old.content;
+    }
+
     // commitments buried inside a longer note become their own ledger
     // entries — drop a document, and your agenda updates itself
     const embedded = (envelope?.commitments ?? []).filter(
@@ -84,7 +116,7 @@ export async function POST(request: Request) {
         supermemory
           .add({
             content: c.content.trim(),
-            containerTag: spaceTag(asSpace(body.space)),
+            containerTag: spaceTag(space),
             metadata: {
               source: `${source}#ledger`,
               type: "commitment",
@@ -100,8 +132,12 @@ export async function POST(request: Request) {
 
     // a memory told seconds ago must be recallable seconds later — the
     // fusion's fresh-list only sees it if the corpus cache re-reads
-    invalidateCorpus(asSpace(body.space));
-    return Response.json({ ...doc, envelope: envelope ?? undefined });
+    invalidateCorpus(space);
+    return Response.json({
+      ...doc,
+      envelope: envelope ?? undefined,
+      ...(superseded ? { superseded } : {}),
+    });
   } catch (err) {
     return apiError(err);
   }
