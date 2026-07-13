@@ -2,6 +2,8 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { openrouter, MODEL_FLASH, MODEL_PRO } from "./ai";
 
+export { redactSecrets } from "./memory/redaction";
+
 // ── The write envelope ────────────────────────────────────────────
 // One enrichment pass on every message before it becomes memory, so
 // wisdom is encoded at write time instead of chased at read time.
@@ -63,34 +65,6 @@ export const EnvelopeSchema = z.object({
 });
 
 export type Envelope = z.infer<typeof EnvelopeSchema>;
-
-// Secrets never leave the machine: this runs BEFORE the enrichment
-// call, so keys and passwords are stripped locally, not by the LLM.
-const SECRET_PATTERNS: RegExp[] = [
-  /sk-[A-Za-z0-9_-]{16,}/g, // openai / openrouter style
-  /sk_[A-Za-z0-9]{16,}/g, // elevenlabs style
-  /sm_[A-Za-z0-9]{16,}/g, // supermemory
-  /gsk_[A-Za-z0-9]{16,}/g, // groq
-  /csk-[A-Za-z0-9]{16,}/g, // cerebras
-  /ghp_[A-Za-z0-9]{20,}/g, // github
-  /AKIA[A-Z0-9]{12,}/g, // aws
-  /xoxb-[A-Za-z0-9-]{20,}/g, // slack
-  /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, // jwt
-  /(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S{6,}/gi,
-];
-
-export function redactSecrets(text: string): { text: string; redacted: boolean } {
-  let redacted = false;
-  let out = text;
-  for (const re of SECRET_PATTERNS) {
-    if (re.test(out)) {
-      redacted = true;
-      out = out.replace(re, "[redacted]");
-    }
-    re.lastIndex = 0;
-  }
-  return { text: out, redacted };
-}
 
 const RULES = `You are the write-side enricher of a personal memory system. One message arrives; you emit its envelope so the read side never has to guess. Output every field.
 
