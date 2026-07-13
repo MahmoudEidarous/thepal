@@ -1,5 +1,8 @@
 import { supermemory, spaceTag, smPost } from "@/lib/supermemory";
 import { apiError, asSpace } from "@/lib/validate";
+import { scheduleMemoryReconciliation } from "@/lib/memory/reconcile-scheduler";
+
+export const runtime = "nodejs";
 
 type EntriesResponse = {
   memoryEntries: Array<{
@@ -21,6 +24,9 @@ type EntriesResponse = {
 // history) plus documents still moving through the pipeline.
 export async function GET(request: Request) {
   try {
+    // The feed already polls while Recall is open, making it a reliable,
+    // zero-extra-request heartbeat for canonical events awaiting a mirror.
+    scheduleMemoryReconciliation(250);
     const url = new URL(request.url);
     const tag = spaceTag(asSpace(url.searchParams.get("space")));
 

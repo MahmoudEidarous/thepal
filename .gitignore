@@ -44,6 +44,9 @@ next-env.d.ts
 # supermemory local data (never commit)
 .supermemory/
 
+# Recall's canonical local memory ledger (never commit)
+.recall/
+
 # eve runtime state (generated)
 /.eve/
 /.workflow-data/

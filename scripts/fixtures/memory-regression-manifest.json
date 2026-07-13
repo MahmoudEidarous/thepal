@@ -1,0 +1,26 @@
+{
+  "contractVersion": 1,
+  "purpose": "Frozen Phase 0 behavior gates that must stay green as the memory architecture evolves.",
+  "suites": [
+    {
+      "name": "capture envelope",
+      "command": "node scripts/eval-envelope.mjs",
+      "expected": "21/21 passing"
+    },
+    {
+      "name": "prospective memory",
+      "command": "node scripts/eval-prospective.mjs",
+      "expected": "13/13 passing"
+    },
+    {
+      "name": "commitment ledger",
+      "command": "node scripts/eval-ledger.mjs",
+      "expected": "15/15 passing"
+    },
+    {
+      "name": "canonical memory foundation",
+      "command": "npm run eval:memory-foundation",
+      "expected": "64 checks passing"
+    }
+  ]
+}
