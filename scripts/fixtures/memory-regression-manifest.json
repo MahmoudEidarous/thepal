@@ -21,6 +21,16 @@
       "name": "canonical memory foundation",
       "command": "npm run eval:memory-foundation",
       "expected": "64 checks passing"
+    },
+    {
+      "name": "claims and temporal truth",
+      "command": "npm run eval:memory-truth",
+      "expected": "49 checks passing"
+    },
+    {
+      "name": "memory concurrency and crash recovery",
+      "command": "npm run eval:memory-stress",
+      "expected": "12 checks passing"
     }
   ]
 }

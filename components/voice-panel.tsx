@@ -584,14 +584,28 @@ function VoiceCore({
           search_memories: ({ query }: { query: string }) =>
             track("searching memories", async () => {
               const data = await postJson("/api/recall", { q: query, limit: 6 });
+              const compiled = (data.beliefs ?? []).map(
+                (belief: {
+                  text: string;
+                  status: "current" | "conflicting";
+                  confidence: string;
+                  systemTime?: { start?: string };
+                }) => ({
+                  text: `${belief.status === "current" ? "CURRENT TRUTH" : "UNRESOLVED CONFLICT"}: ${belief.text} [${belief.confidence}]`,
+                  told: belief.systemTime?.start ?? null,
+                }),
+              );
               // told-timestamps ride along so the agent can arbitrate
               // conflicts — the latest telling is the current truth
-              const raw = (data.results ?? [])
+              const semantic = (data.results ?? [])
                 .map((r: { memory?: string; chunk?: string; createdAt?: string | null }) => {
                   const text = r.memory ?? r.chunk;
                   return text ? { text, told: r.createdAt ?? null } : null;
                 })
                 .filter(Boolean) as Array<{ text: string; told: string | null }>;
+              // Compiled current state leads; semantic evidence follows so the
+              // agent can explain history without treating an old hit as now.
+              const raw = [...compiled, ...semantic];
               // the receipts: what the answer is standing on, cited on screen
               if (raw.length)
                 pushCard({ id: ++seq.current, kind: "receipts", status: "ready", hits: raw, ttl: 10_000 });

@@ -189,6 +189,7 @@ try {
     subject: claim.subject,
     predicate: claim.predicate,
     value: claim.object,
+    polarity: claim.polarity,
     status: "current",
     confidence: "direct",
     validTime: claim.validTime,

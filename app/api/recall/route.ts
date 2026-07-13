@@ -1,5 +1,8 @@
 import { fusedRecall } from "@/lib/fusion";
+import { retrieveApplicableBeliefs } from "@/lib/memory/belief-retrieval";
 import { apiError, asSpace } from "@/lib/validate";
+
+export const runtime = "nodejs";
 
 // Proactive recall: the voice agent's search_memories and the typing
 // debounce both land here. One vague question fans out into parallel
@@ -12,8 +15,12 @@ export async function POST(request: Request) {
       return Response.json({ results: [] });
     }
     const limit = Math.min(8, Math.max(1, Number(body.limit) || 4));
-    const results = await fusedRecall({ q, space: asSpace(body.space), limit });
-    return Response.json({ results });
+    const space = asSpace(body.space);
+    const [results, beliefs] = await Promise.all([
+      fusedRecall({ q, space, limit }),
+      Promise.resolve(retrieveApplicableBeliefs(q, space, { limit: 4 })),
+    ]);
+    return Response.json({ beliefs, results });
   } catch (err) {
     return apiError(err);
   }

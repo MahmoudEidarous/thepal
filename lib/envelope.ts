@@ -126,13 +126,15 @@ export function localToday(): string {
 // Providers occasionally disagree on whether "next Friday" means the
 // coming Friday or the one after it. The Writer already knows today's
 // exact local date, so explicit next-weekday commitments do not need a
-// model opinion: resolve the next occurrence strictly after today.
-const NEXT_WEEKDAY =
-  /\bnext\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi;
+// model opinion: resolve the next occurrence strictly after today. The same
+// rule applies to explicit by/on weekdays; providers occasionally return the
+// adjacent calendar date even while classifying the commitment correctly.
+const NAMED_WEEKDAY =
+  /\b(?:next|by|on|before)\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi;
 
 function pinNextWeekdayDue(envelope: Envelope | null, raw: string, today: string): Envelope | null {
   if (!envelope || envelope.type !== "commitment") return envelope;
-  const named = [...raw.matchAll(NEXT_WEEKDAY)].map((match) => match[1].toLowerCase());
+  const named = [...raw.matchAll(NAMED_WEEKDAY)].map((match) => match[1].toLowerCase());
   const unique = [...new Set(named)];
   if (unique.length !== 1) return envelope;
   const target = WEEKDAYS.findIndex((day) => day.toLowerCase() === unique[0]);

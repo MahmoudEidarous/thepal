@@ -3,6 +3,11 @@ import { apiError, asSpace } from "@/lib/validate";
 import { enrich, localToday, redactSecrets } from "@/lib/envelope";
 import { invalidateCorpus } from "@/lib/fusion";
 import { stripHints } from "@/lib/ledger";
+import { processCaptureJob } from "@/lib/memory/reconciler";
+import { scheduleMemoryReconciliation } from "@/lib/memory/reconcile-scheduler";
+import { correctEvidence } from "@/lib/memory/write-broker";
+
+export const runtime = "nodejs";
 
 type SearchResponse = {
   results?: Array<{
@@ -90,10 +95,41 @@ export async function POST(request: Request) {
     }
 
     const before = stripHints(doc.content ?? "");
+    const canonicalEventId =
+      typeof doc.metadata?.canonicalEventId === "string"
+        ? doc.metadata.canonicalEventId
+        : null;
     // dryRun: which memory WOULD be rewritten — for eval harnesses and
     // anything that wants to look before it leaps. Nothing changes.
     if (body.dryRun === true) {
-      return Response.json({ match: before, similarity });
+      return Response.json({ match: before, similarity, canonicalEventId });
+    }
+
+    // New canonical memories are never rewritten in place. A correction is
+    // another user-authored event linked to the old telling; the belief
+    // projector decides current truth while both pieces of history survive.
+    if (canonicalEventId) {
+      const corrected = correctEvidence({
+        targetEventId: canonicalEventId,
+        content: correction,
+        source: "recall-voice#amend",
+        userId: "local-user",
+        idempotencyKey:
+          request.headers.get("Idempotency-Key") ??
+          (typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined),
+      });
+      scheduleMemoryReconciliation(100);
+      const mirrored = await processCaptureJob(corrected.receipt.jobId);
+      return Response.json({
+        before,
+        after: corrected.safeContent,
+        canonical: true,
+        status: mirrored.state,
+        receipt: corrected.receipt,
+        ...(mirrored.state === "succeeded"
+          ? { envelope: mirrored.response.envelope }
+          : {}),
+      });
     }
     const today = localToday();
     // secrets are stripped on this machine before any model sees them
