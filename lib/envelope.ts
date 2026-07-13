@@ -44,6 +44,17 @@ export const EnvelopeSchema = z.object({
   commitments: z
     .array(z.object({ content: z.string(), due: z.string().nullable() }))
     .max(5),
+  // an intention whose due moment is contextual rather than calendrical:
+  // "next time Vienna comes up, remind me about pricing". It remains a
+  // commitment, but lives in the prospective ledger instead of today's
+  // agenda and fires only when its topic returns in conversation.
+  prospective: z
+    .object({
+      topic: z.string(),
+      action: z.string(),
+      firePolicy: z.literal("once"),
+    })
+    .nullable(),
   // when the message reschedules/replaces one of the OPEN ledger items
   // shown to the enricher: that item's number. The reschedule pattern —
   // "the Sofia meeting is tomorrow now" must retire the old telling, or
@@ -102,6 +113,7 @@ field rules:
 - entities: who and what this is about; alternate spellings as aliases of one entity. kind: person (a human) · place (city, neighborhood, venue, country) · thread (an ongoing storyline — a move, a pilot, an application, a course) · thing (org, product, object, team).
 - hints: 1-3 rephrasings or questions this memory answers, using DIFFERENT words than the original.
 - commitments: promises or hard deadlines buried INSIDE a longer message (notes, documents), each as a standalone statement with its due date resolved. One-time obligations only — recurring bills, rent, and routines are facts of life, never ledger items. Empty when there are none — or when the whole message is itself the commitment (then use type=commitment instead).
+- prospective: a forward memory whose trigger is a future CONTEXT rather than a date — "next time Vienna comes up, remind me to ask about pricing", "when I mention Layla again, ask how the interview went". Output {topic, action, firePolicy:"once"}; topic is the shortest specific person/place/project/thread phrase that should trigger it, action is what Recall must say or ask. Set type=commitment, due=null, commitments=[] and keep the full intention in text. null for ordinary reminders, dated promises, and statements that merely contain words like "next time" without asking Recall to remember forward.
 - supersedes: when an "open ledger" list is provided and the message RESCHEDULES or REPLACES one of those items — same errand, new day/time/terms — output that item's number. It must be the same task: a different errand for the same person is NEVER a supersede ("send Brandt the contract" does not supersede "send Brandt the one-pager"). null when no list is given, or nothing matches, or the message merely mentions an item.`;
 
 async function callEnricher(model: string, prompt: string, timeoutMs: number): Promise<Envelope> {
@@ -135,6 +147,26 @@ const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Frida
 // machine, so the machine's "today" IS the user's today.
 export function localToday(): string {
   return new Date().toLocaleDateString("en-CA");
+}
+
+// Providers occasionally disagree on whether "next Friday" means the
+// coming Friday or the one after it. The Writer already knows today's
+// exact local date, so explicit next-weekday commitments do not need a
+// model opinion: resolve the next occurrence strictly after today.
+const NEXT_WEEKDAY =
+  /\bnext\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi;
+
+function pinNextWeekdayDue(envelope: Envelope | null, raw: string, today: string): Envelope | null {
+  if (!envelope || envelope.type !== "commitment") return envelope;
+  const named = [...raw.matchAll(NEXT_WEEKDAY)].map((match) => match[1].toLowerCase());
+  const unique = [...new Set(named)];
+  if (unique.length !== 1) return envelope;
+  const target = WEEKDAYS.findIndex((day) => day.toLowerCase() === unique[0]);
+  const [year, month, day] = today.split("-").map(Number);
+  const base = new Date(year, month - 1, day, 12);
+  const diff = (target - base.getDay() + 7) % 7 || 7;
+  base.setDate(base.getDate() + diff);
+  return { ...envelope, due: base.toLocaleDateString("en-CA") };
 }
 
 // a note that smells of deadlines but enveloped with zero commitments
@@ -230,7 +262,7 @@ export async function enrich(
   const dropRecurring = (e: Envelope | null): Envelope | null =>
     e ? { ...e, commitments: e.commitments.filter((c) => !RECURRING.test(c.content)) } : e;
 
-  const first = dropRecurring(await raceOnce());
+  const first = pinNextWeekdayDue(dropRecurring(await raceOnce()), rawContent, today);
   // the one measured flake: a deadline-smelling note enveloped with an
   // empty commitments[] (~1 run in 4). Under the full 11-field schema
   // BOTH models sometimes drop buried deadlines; under a minimal schema

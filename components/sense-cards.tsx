@@ -26,6 +26,7 @@ export type FiledEnvelope = {
   salience: number;
   entities: Array<{ name: string; kind: string }>;
   commitments: Array<{ content: string; due: string | null }>;
+  prospective?: { topic: string; action: string; firePolicy: "once" } | null;
 };
 
 export type Receipt = { text: string; told: string | null };
@@ -663,11 +664,16 @@ function FiledBody({ card, onDismiss }: { card: Extract<SenseCard, { kind: "file
         <Dismiss onClick={onDismiss} />
       </div>
       <p className="mt-2 line-clamp-3 px-4 text-[12.5px] leading-relaxed text-zinc-200">{card.text}</p>
-      {(e.due || e.entities.length > 0) && (
+      {(e.due || e.prospective || e.entities.length > 0) && (
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5 px-4">
           {e.due && (
             <span className="flex items-center gap-1 rounded-full bg-amber-300/[0.09] py-[3px] pl-2 pr-2.5 font-mono text-[9.5px] tracking-[0.08em] text-amber-200/90 ring-1 ring-inset ring-amber-300/[0.18] tabular-nums">
               due {shortDue(e.due)}
+            </span>
+          )}
+          {e.prospective && (
+            <span className="flex items-center gap-1 rounded-full bg-sky-300/[0.09] py-[3px] pl-2 pr-2.5 font-mono text-[9.5px] tracking-[0.08em] text-sky-200/90 ring-1 ring-inset ring-sky-300/[0.18]">
+              next time · {e.prospective.topic}
             </span>
           )}
           {e.entities.slice(0, 4).map((en, i) => (

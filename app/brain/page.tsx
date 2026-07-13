@@ -26,6 +26,15 @@ type LedgerItem = {
   completedAt: string | null;
 };
 
+type ProspectiveItem = {
+  id: string;
+  content: string;
+  topic: string;
+  action: string;
+  snoozedUntil: string | null;
+  createdAt: string | null;
+};
+
 type Capture = {
   id: string;
   createdAt?: string;
@@ -231,7 +240,11 @@ export default function Brain() {
   const [q, setQ] = useState("");
   const [profileLines, setProfileLines] = useState<string[]>([]);
   const [box, setBox] = useState({ w: 1280, h: 800 });
-  const [ledger, setLedger] = useState<{ open: LedgerItem[]; done: LedgerItem[] } | null>(null);
+  const [ledger, setLedger] = useState<{
+    open: LedgerItem[];
+    done: LedgerItem[];
+    prospective: ProspectiveItem[];
+  } | null>(null);
   const [captures, setCaptures] = useState<Capture[] | null>(null);
   const [hintsFor, setHintsFor] = useState<Record<string, string[]>>({});
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
@@ -263,7 +276,15 @@ export default function Brain() {
   const loadLedger = useCallback(() => {
     fetch("/api/ledger")
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d && setLedger({ open: d.open ?? [], done: d.done ?? [] }))
+      .then(
+        (d) =>
+          d &&
+          setLedger({
+            open: d.open ?? [],
+            done: d.done ?? [],
+            prospective: d.prospective ?? [],
+          }),
+      )
       .catch(() => {});
   }, []);
 
@@ -317,6 +338,20 @@ export default function Brain() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }),
+    }).catch(() => {});
+    setClosing(null);
+    loadLedger();
+  }
+
+  async function manageProspective(
+    id: string,
+    operation: "resolve" | "cancel" | "snooze",
+  ) {
+    setClosing(id);
+    await fetch("/api/prospective", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation, id }),
     }).catch(() => {});
     setClosing(null);
     loadLedger();
@@ -1001,6 +1036,66 @@ export default function Brain() {
               </p>
             </div>
 
+            {ledger && ledger.prospective.length > 0 && (
+              <section>
+                <h2 className="mb-2.5 flex items-baseline gap-2 font-mono text-[10.5px] uppercase tracking-[0.25em] text-sky-300/80">
+                  next time
+                  <span className="text-zinc-600">{ledger.prospective.length}</span>
+                </h2>
+                <div className="glass divide-y divide-white/[0.055] rounded-2xl">
+                  {ledger.prospective.map((trigger) => (
+                    <div
+                      key={trigger.id}
+                      className={
+                        "px-5 py-4 transition-opacity duration-500 " +
+                        (closing === trigger.id ? "opacity-30" : "")
+                      }
+                    >
+                      <div className="flex items-start gap-3.5">
+                        <span className="mt-1.5 size-[7px] shrink-0 rounded-full bg-sky-300/90 shadow-[0_0_9px_1px_rgb(125_211_252/0.45)]" />
+                        <div className="min-w-0 flex-1">
+                          <p className="font-mono text-[9.5px] uppercase tracking-[0.2em] text-sky-300/70">
+                            when {trigger.topic} comes up
+                          </p>
+                          <p className="mt-1.5 text-[14.5px] leading-relaxed text-zinc-100">
+                            {trigger.action}
+                          </p>
+                          {trigger.snoozedUntil && (
+                            <p className="mt-1 font-mono text-[9.5px] tracking-[0.08em] text-zinc-600">
+                              quiet until {trigger.snoozedUntil.slice(0, 10)}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2 pl-[21px]">
+                        <button
+                          onClick={() => manageProspective(trigger.id, "resolve")}
+                          disabled={closing === trigger.id}
+                          className="rounded-full bg-emerald-300/[0.08] px-3 py-1.5 text-[10.5px] text-emerald-200/80 ring-1 ring-inset ring-emerald-300/[0.15] transition-colors hover:bg-emerald-300/[0.14]"
+                        >
+                          handled
+                        </button>
+                        <button
+                          onClick={() => manageProspective(trigger.id, "snooze")}
+                          disabled={closing === trigger.id}
+                          className="rounded-full bg-white/[0.04] px-3 py-1.5 text-[10.5px] text-zinc-400 ring-1 ring-inset ring-white/[0.07] transition-colors hover:text-zinc-200"
+                        >
+                          tomorrow
+                        </button>
+                        <button
+                          onClick={() => manageProspective(trigger.id, "cancel")}
+                          disabled={closing === trigger.id}
+                          className="rounded-full px-3 py-1.5 text-[10.5px] text-zinc-600 transition-colors hover:text-red-300"
+                        >
+                          cancel
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {groups.map((g) => (
               <section key={g.title}>
                 <h2
@@ -1049,7 +1144,7 @@ export default function Brain() {
               </section>
             ))}
 
-            {ledger && openCount === 0 && (
+            {ledger && openCount === 0 && ledger.prospective.length === 0 && (
               <div className="glass rounded-3xl p-8 text-center">
                 <p className="text-[15px] font-light text-zinc-200">The ledger is clear.</p>
                 <p className="mt-1.5 text-[12.5px] text-zinc-500">
@@ -1252,6 +1347,11 @@ export default function Brain() {
                                 {c.meta.status === "superseded" ? "superseded ↻" : "cancelled"}
                               </span>
                             )}
+                            {c.meta.triggerMode === "context" && (
+                              <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.16em] text-sky-300/70">
+                                prospective
+                              </span>
+                            )}
                             {typeof c.meta.storyDate === "string" &&
                               c.meta.storyDate !== c.meta.due && (
                                 <span className="truncate font-mono text-[9.5px] tracking-[0.1em] text-zinc-600 tabular-nums">
@@ -1297,6 +1397,12 @@ export default function Brain() {
                                   : (c.meta.due as string)}
                               </span>
                             )}
+                            {c.meta.triggerMode === "context" &&
+                              typeof c.meta.triggerTopic === "string" && (
+                                <span className="flex items-center rounded-full bg-sky-300/[0.08] px-2 py-[2px] font-mono text-[9px] tracking-[0.08em] text-sky-200/80 ring-1 ring-inset ring-sky-300/[0.16]">
+                                  next time · {c.meta.triggerTopic as string}
+                                </span>
+                              )}
                             {entities.map((e) => (
                               <span
                                 key={e}
@@ -1316,6 +1422,19 @@ export default function Brain() {
                               <span className="font-mono text-[9.5px] text-zinc-700">no hints</span>
                             ) : null}
                           </div>
+                          {typeof c.meta.updatesText === "string" && (
+                            <p className="mt-2 border-l border-sky-300/25 pl-3 font-mono text-[10px] leading-relaxed text-zinc-500">
+                              <span className="mr-1.5 uppercase tracking-[0.16em] text-sky-300/70">
+                                updates
+                              </span>
+                              “{c.meta.updatesText as string}”
+                              {typeof c.meta.updatesTold === "string" && (
+                                <span className="ml-1.5 text-zinc-600">
+                                  told {timeAgo(c.meta.updatesTold as string)}
+                                </span>
+                              )}
+                            </p>
+                          )}
                           {hints !== undefined && hints.length > 0 && (
                             <div className="mt-2 flex flex-col gap-1 border-l border-white/[0.07] pl-3">
                               {hints.map((h, i) => (

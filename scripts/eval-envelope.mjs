@@ -49,6 +49,17 @@ const CASES = [
     check: (e) => e.type === "commitment" && SUNDAYS.has(e.due),
   },
   {
+    name: "prospective memory has context instead of due date",
+    content: "Next time Vienna comes up, remind me to ask about pricing.",
+    critical: true,
+    check: (e) =>
+      e.type === "commitment" &&
+      e.due === null &&
+      e.prospective?.topic?.toLowerCase().includes("vienna") &&
+      e.prospective?.action?.toLowerCase().includes("pricing") &&
+      e.prospective?.firePolicy === "once",
+  },
+  {
     name: "musing is not a commitment",
     content: "Maybe someday I'll switch to a Framework laptop.",
     critical: true,

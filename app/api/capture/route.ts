@@ -80,7 +80,25 @@ export async function POST(request: Request) {
       today,
       ledger.map((c) => c.content),
     );
-    const conflict = findConflict(await probeP, safe, envelope);
+    const semanticConflict = findConflict(await probeP, safe, envelope);
+    const supIdx = envelope?.supersedes;
+    const priorCommitment =
+      typeof supIdx === "number" && supIdx >= 1 && supIdx <= ledger.length
+        ? ledger[supIdx - 1]
+        : null;
+    // A reschedule already has a stronger signal than vector similarity:
+    // the enricher identified the exact open commitment it replaces. Turn
+    // that same link into the visible, timestamped update receipt instead
+    // of presenting commitments as a separate continuity mechanism.
+    const conflict =
+      semanticConflict ??
+      (priorCommitment
+        ? {
+            id: priorCommitment.id,
+            text: priorCommitment.content,
+            told: priorCommitment.createdAt,
+          }
+        : null);
 
     // eval harness: return the envelope without persisting anything
     if (body.dryRun === true) {
@@ -136,6 +154,18 @@ export async function POST(request: Request) {
                 : {}),
             }
           : {}),
+        // prospective memory: still a commitment, but its due moment is
+        // a future conversational context. The agenda excludes this mode;
+        // the trigger matcher owns when it becomes relevant.
+        ...(envelope?.prospective
+          ? {
+              triggerMode: "context",
+              triggerTopic: envelope.prospective.topic.slice(0, 120),
+              triggerAction: envelope.prospective.action.slice(0, 300),
+              triggerFirePolicy: envelope.prospective.firePolicy,
+              triggerCreatedAt: new Date().toISOString(),
+            }
+          : {}),
         // "this changes what I knew" — stamped atomically in the add
         // (a PATCH on a still-processing doc is silently eaten)
         ...(conflict
@@ -153,7 +183,6 @@ export async function POST(request: Request) {
     // moved to Tuesday" sometimes files as an event, and the old open
     // item must still retire or the agenda holds both days.
     let superseded: string | null = null;
-    const supIdx = envelope?.supersedes;
     if (typeof supIdx === "number" && supIdx >= 1 && supIdx <= ledger.length) {
       const old = ledger[supIdx - 1];
       // setLedgerStatus rides the engine's sharp edges: settle races and

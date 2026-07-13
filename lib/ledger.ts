@@ -5,6 +5,7 @@ import { smRequest, supermemory } from "./supermemory";
 
 type Doc = {
   id: string;
+  status?: string | null;
   content?: string | null;
   title?: string | null;
   summary?: string | null;
@@ -33,6 +34,7 @@ export type OpenCommitment = {
   id: string;
   content: string;
   due: string | null;
+  createdAt: string | null;
   metadata: Record<string, unknown>;
 };
 
@@ -41,7 +43,9 @@ export async function openCommitments(tag: string): Promise<OpenCommitment[]> {
   // supersede can read as still-open for minutes) — so candidates come
   // from the list, but truth comes from each document itself. The gets
   // were already needed for content; fresh metadata rides along free.
-  const candidates = (await listDocs(tag)).filter((d) => d.metadata?.type === "commitment");
+  const candidates = (await listDocs(tag)).filter(
+    (d) => d.metadata?.type === "commitment" && d.metadata?.triggerMode !== "context",
+  );
   const full = await Promise.all(
     candidates.map(async (d) => {
       const got = (await supermemory.documents.get(d.id).catch(() => null)) as {
@@ -53,6 +57,7 @@ export async function openCommitments(tag: string): Promise<OpenCommitment[]> {
         id: d.id,
         content: stripHints(got?.content ?? d.content ?? d.title ?? d.summary ?? ""),
         due: typeof md.due === "string" ? (md.due as string) : null,
+        createdAt: d.createdAt ?? null,
         metadata: md,
       };
     }),
@@ -76,7 +81,9 @@ export type LedgerItem = {
 export async function allCommitments(tag: string): Promise<LedgerItem[]> {
   // same staleness rule as openCommitments: list for candidates, the
   // document itself for the truth of its status
-  const docs = (await listDocs(tag)).filter((d) => d.metadata?.type === "commitment");
+  const docs = (await listDocs(tag)).filter(
+    (d) => d.metadata?.type === "commitment" && d.metadata?.triggerMode !== "context",
+  );
   const full = await Promise.all(
     docs.map(async (d) => {
       const got = (await supermemory.documents.get(d.id).catch(() => null)) as {
@@ -114,15 +121,18 @@ export async function setLedgerStatus(
   patch: Record<string, unknown>,
 ): Promise<void> {
   let doc: Doc | null = null;
-  for (let i = 0; i < 8; i++) {
-    doc = (await supermemory.documents.get(id).catch(() => null)) as Doc | null;
-    const st = (doc as { status?: string | null } | null)?.status;
-    if (!doc || !st || st === "done" || st === "failed") break;
-    await new Promise((r) => setTimeout(r, 2000));
+  for (let i = 0; i < 24; i++) {
+    // Use the raw endpoint here. The SDK document shape can omit status
+    // during the first moments after add; treating "missing" as settled
+    // races processing and the finalizer overwrites our lifecycle PATCH.
+    doc = await smRequest<Doc>("GET", `/v3/documents/${id}`, undefined).catch(() => null);
+    const st = doc?.status;
+    if (!doc || st === "done" || st === "failed") break;
+    await new Promise((r) => setTimeout(r, 1000));
   }
   if (!doc) return;
   const md = { ...(doc.metadata ?? {}), ...patch };
-  const st = (doc as { status?: string | null }).status;
+  const st = doc.status;
   if (st === "failed") {
     await supermemory.add({
       content: doc.content ?? doc.title ?? doc.summary ?? "",
@@ -132,7 +142,20 @@ export async function setLedgerStatus(
     await smRequest("DELETE", `/v3/documents/${id}`, undefined).catch(() => {});
     return;
   }
-  await smRequest("PATCH", `/v3/documents/${id}`, { metadata: md });
+  // A document can report done a fraction before its final metadata
+  // commit lands. PATCH, read back, and retry if that last write won the
+  // race; lifecycle transitions are too important for fire-and-pray.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await smRequest("PATCH", `/v3/documents/${id}`, { metadata: md });
+    await new Promise((resolve) => setTimeout(resolve, 500 + attempt * 350));
+    const fresh = await smRequest<Doc>("GET", `/v3/documents/${id}`, undefined).catch(
+      () => null,
+    );
+    const metadata = fresh?.metadata ?? {};
+    const kept = Object.entries(patch).every(([key, value]) => metadata[key] === value);
+    if (kept) return;
+  }
+  throw new Error(`ledger lifecycle patch did not settle for ${id}`);
 }
 
 // SAFETY and boundaries are pinned: injected into every session at

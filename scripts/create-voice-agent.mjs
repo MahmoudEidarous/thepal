@@ -70,6 +70,64 @@ const TOOLS = [
     ),
   },
   {
+    name: "add_prospective_memory",
+    description:
+      "Create a context-triggered future memory when the user says 'next time X comes up, remind me…' or 'when I mention Y again…'. This is NOT a dated reminder: topic is the future conversational context, reminder is what to bring up. Save silently, then react to the substance.",
+    expects_response: true,
+    parameters: params(
+      {
+        topic: {
+          type: "string",
+          description:
+            "Shortest specific trigger topic — a person, place, project, or thread such as Vienna or Layla's interview.",
+        },
+        reminder: {
+          type: "string",
+          description:
+            "What Recall should say or ask when that topic returns, as one standalone action.",
+        },
+      },
+      ["topic", "reminder"],
+    ),
+  },
+  {
+    name: "get_prospective_memories",
+    description:
+      "List open 'next time this comes up' memories. Use when the user asks what Recall is waiting to remind them about, or before changing one without an exact id.",
+    expects_response: true,
+    parameters: params({}, []),
+  },
+  {
+    name: "manage_prospective_memory",
+    description:
+      "Move a context-triggered memory through its lifecycle. fire = its topic just matched and you are about to deliver it once; resolve = user says it is handled; cancel = user no longer wants it; snooze = keep it quiet until a date. Prefer the exact id supplied by a PROSPECTIVE MEMORY MATCHED context note; otherwise use about.",
+    expects_response: true,
+    response_timeout_secs: 45,
+    parameters: params(
+      {
+        id: { type: "string", description: "Exact trigger id from a match or list, when available" },
+        about: {
+          type: "string",
+          description: "Topic/reminder words used only when no exact id is available",
+        },
+        action: {
+          type: "string",
+          enum: ["fire", "resolve", "cancel", "snooze"],
+          description: "Lifecycle action",
+        },
+        until: {
+          type: "string",
+          description: "For snooze: YYYY-MM-DD. Omit to snooze until tomorrow.",
+        },
+        reason: {
+          type: "string",
+          description: "For fire: short natural reason the current conversation matched",
+        },
+      },
+      ["action"],
+    ),
+  },
+  {
     name: "get_agenda",
     description:
       "Read the commitment ledger: every open commitment with its due date, overdue flagged. Use when the user asks what they owe, what's next, or what's on their plate.",
@@ -96,7 +154,7 @@ const TOOLS = [
   {
     name: "edit_memory",
     description:
-      "Rewrite ONE existing memory when the user corrects it — 'actually it's Friday, not Thursday', 'her name is Lena, not Lina', 'the rent is 1450 now'. Pass what to find and the full corrected statement. Only for corrections to something already saved; brand-new information is add_memory. Instant — it files itself while you keep talking: react to the change in one short line ('Friday it is'), never announce the edit. A note arrives only if it missed; own it then.",
+      "Surgically repair ONE memory only when the user says Recall recorded it incorrectly — a misspelling, extraction mistake, or explicit request to edit the saved record. A real-world change ('the call moved', 'the rent is 1450 now', 'I changed my mind') is a NEW telling through add_memory so history remains visible. Pass what to find and the full corrected statement. Instant — it files itself while you keep talking; never announce the edit. A note arrives only if it missed; own it then.",
     expects_response: true,
     parameters: params(
       {
@@ -301,7 +359,14 @@ When something's worth keeping, call add_memory and keep talking about the subst
 
 # Catch the conflicts
 If something they just told you collides with a boundary or a strong preference you know ("nothing before 10am", "no work talk after ten"), point it out with a grin — "9am? You? The no-mornings rule died fast." Catching it IS the product.
-Sometimes after a save, a note tells you the new telling UPDATES something older you knew — the system caught the flip in real time. If it's interesting, ONE grinning line ("wasn't this Volkspark last week?") and move on; never recite the old version in full, never lecture about the change. A mundane update passes in silence.
+Real-world changes are NEW tellings: a moved call, changed price, new preference, reversal, or "actually, now…" goes through add_memory. Never use edit_memory for those—the Writer links the versions, preserves the old telling as history, and retires an old commitment when appropriate. edit_memory is only for repairing something Recall itself recorded incorrectly. Sometimes after a save, a note tells you the new telling UPDATES something older you knew—the system caught the flip in real time. If it's interesting, ONE grinning line ("wasn't this Volkspark last week?") and move on; never recite the old version in full, never lecture about the change. A mundane update passes in silence.
+
+# Remember forward — prospective memory
+When the user says "next time X comes up, remind me…", "when I mention Y again…", or otherwise asks for a reminder whose due moment is a FUTURE CONVERSATIONAL CONTEXT rather than a date, call add_prospective_memory. Never put it in the dated agenda and never reduce it to an ordinary memory.
+Open prospective memories at session start:
+{{prospective}}
+The browser matches every finalized user turn deterministically: exact topic first, guarded fuzzy fallback. When a contextual note arrives beginning PROSPECTIVE MEMORY MATCHED, follow it immediately: call manage_prospective_memory with its exact id and action=fire, then deliver the reminder ONCE in one natural line. Say that they asked you to bring it up next time this topic appeared, so the interruption is legible; never mention IDs, matching, triggers, or machinery. The fire call consumes a once-memory and preserves it as history.
+Lifecycle verbs are literal: "not now"/"later" → snooze; "handled"/"I did it" → resolve; "never mind"/"don't remind me" → cancel. Use get_prospective_memories when they ask what future reminders are waiting. One prospective reminder per turn, ever; if several topics collide, let the others wait.
 
 # Ground truth
 Anything about the user's life comes from search_memories or get_profile first. Nothing found? Say so — "you haven't told me" — and never invent. Facts you assert; impressions you float ("you seemed fried yesterday — am I wrong?"). When something contradicts an old memory, call it out with a grin — "last week this was Cairo. Berlin now?" — then keep the newer truth.
@@ -336,8 +401,9 @@ If something's overdue or due within two days and unmentioned this session, weav
 The ledger's verbs, exactly:
 - It happened / they did it → complete_commitment.
 - It's called off, not happening → complete_commitment with outcome cancelled. Never delete a scrapped plan.
-- It MOVED — new day, time, or terms → edit_memory with the correction. NEVER add_memory for a reschedule: the ledger must never hold both the old time and the new one.
+- It MOVED — new day, time, or terms → add_memory with the complete new terms. The Writer links the tellings and supersedes the old ledger item, so history stays honest while the agenda still nags exactly once.
 - Genuinely new promise → add_memory. get_agenda when they ask what they owe.
+- "Next time X comes up…" is NOT this ledger — it is add_prospective_memory.
 
 # This morning's briefing — what the night editor found while they slept
 {{briefing}}

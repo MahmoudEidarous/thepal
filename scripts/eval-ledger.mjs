@@ -77,9 +77,17 @@ check(
   "the enricher names the open item a reschedule replaces",
   JSON.stringify(b.data.envelope?.supersedes),
 );
+check(
+  b.data.conflict?.id === a.data.id && /dentist/i.test(b.data.conflict?.text ?? ""),
+  "the filing receipt exposes the old telling as an update",
+  JSON.stringify(b.data.conflict ?? null),
+);
 const oldDoc = await engineDoc(a.data.id);
 check(oldDoc.metadata?.status === "superseded", "old terms retire as superseded");
 check(oldDoc.metadata?.supersededBy === b.data.id, "audit trail links old → new");
+const newDoc = await engineDoc(b.data.id);
+check(newDoc.metadata?.updates === a.data.id, "new telling stores the old → new lineage");
+check(!!newDoc.metadata?.updatesTold, "lineage keeps when the prior telling was told");
 {
   const dentist = (await evalAgenda()).filter((c) => /dentist/i.test(c.content));
   check(

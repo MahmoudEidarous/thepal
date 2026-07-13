@@ -2,6 +2,7 @@ import { spaceTag } from "@/lib/supermemory";
 import { apiError, asSpace } from "@/lib/validate";
 import { localToday } from "@/lib/envelope";
 import { allCommitments } from "@/lib/ledger";
+import { prospectiveTriggers } from "@/lib/prospective";
 
 // Both sides of the ledger for the UI: open promises (dated, overdue
 // flagged) and the done archive.
@@ -10,7 +11,10 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const tag = spaceTag(asSpace(url.searchParams.get("space")));
     const today = localToday();
-    const all = await allCommitments(tag);
+    const [all, prospective] = await Promise.all([
+      allCommitments(tag),
+      prospectiveTriggers(tag, { includeSnoozed: true }),
+    ]);
     const open = all
       .filter((c) => c.status === "open")
       .map((c) => ({ ...c, overdue: !!c.due && c.due < today, dueToday: c.due === today }))
@@ -18,7 +22,7 @@ export async function GET(request: Request) {
     const done = all
       .filter((c) => c.status === "done")
       .sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""));
-    return Response.json({ today, open, done });
+    return Response.json({ today, open, done, prospective });
   } catch (err) {
     return apiError(err);
   }

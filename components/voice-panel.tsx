@@ -26,6 +26,7 @@ type EnvelopePayload = {
   salience?: number;
   entities?: Array<{ name: string; kind?: string }>;
   commitments?: Array<{ content: string; due: string | null }>;
+  prospective?: { topic: string; action: string; firePolicy: "once" } | null;
 };
 
 const toFiled = (e: EnvelopePayload) => ({
@@ -35,6 +36,7 @@ const toFiled = (e: EnvelopePayload) => ({
   salience: e.salience ?? 0.5,
   entities: (e.entities ?? []).map((en) => ({ name: en.name, kind: en.kind ?? "thing" })),
   commitments: e.commitments ?? [],
+  prospective: e.prospective ?? null,
 });
 
 async function postJson(path: string, body: unknown) {
@@ -184,6 +186,12 @@ function VoiceCore({
   }, []);
   const seq = useRef(0);
   const isSpeakingRef = useRef(false);
+  // Prospective memories are matched automatically against finalized
+  // user turns. The server does exact topic matching before a guarded
+  // fuzzy fallback; seen IDs are a per-session cooldown so one trigger
+  // can never nag twice while its lifecycle update settles.
+  const prospectiveEnabledRef = useRef(false);
+  const prospectiveSeenRef = useRef(new Set<string>());
 
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
@@ -244,6 +252,32 @@ function VoiceCore({
         // the user's voice freezes the constellation where the audio
         // actually is — queued chapters must not light over them
         clearStoryFlips();
+        if (prospectiveEnabledRef.current && message.trim()) {
+          void postJson("/api/prospective", {
+            operation: "match",
+            context: message,
+            seen: [...prospectiveSeenRef.current],
+          })
+            .then((data) => {
+              const match = data.match as
+                | {
+                    id: string;
+                    topic: string;
+                    action: string;
+                    reason: string;
+                    match: "exact" | "fuzzy";
+                  }
+                | null;
+              if (!match?.id || prospectiveSeenRef.current.has(match.id)) return;
+              prospectiveSeenRef.current.add(match.id);
+              try {
+                conversationRef.current.sendContextualUpdate(
+                  `PROSPECTIVE MEMORY MATCHED (${match.match}): id=${match.id}; topic="${match.topic}"; reminder="${match.action}"; reason=${match.reason}. Before or at the first natural beat of this reply, call manage_prospective_memory with this id and action=fire. Then deliver the reminder ONCE in one natural line, including that the user asked you to bring it up next time this topic appeared. Do not describe matching machinery.`,
+                );
+              } catch {}
+            })
+            .catch(() => {});
+        }
       } else {
         lastAgentLine.current = message;
       }
@@ -394,7 +428,7 @@ function VoiceCore({
       // what you owe and what it must never suggest, before you speak.
       // Location + today's sky resolve in the same breath, so "how's the
       // weather?" costs zero tool calls.
-      const [res, agendaData, pinnedData, briefingData, annivData, senses] = await Promise.all([
+      const [res, agendaData, pinnedData, briefingData, annivData, prospectiveData, senses] = await Promise.all([
         fetch("/api/voice/signed-url"),
         fetch("/api/agenda")
           .then((r) => (r.ok ? r.json() : { commitments: [] }))
@@ -408,6 +442,9 @@ function VoiceCore({
         fetch("/api/anniversaries")
           .then((r) => (r.ok ? r.json() : { anniversaries: [] }))
           .catch(() => ({ anniversaries: [] })),
+        fetch("/api/prospective")
+          .then((r) => (r.ok ? r.json() : { triggers: [] }))
+          .catch(() => ({ triggers: [] })),
         (async () => {
           const p = await locate();
           if (!p) return null;
@@ -449,6 +486,20 @@ function VoiceCore({
       const annivText =
         ((annivData.anniversaries ?? []) as Anniv[])
           .map((a) => `- ${a.when} (${a.storyDate}): ${a.text}`)
+          .join("\n") || "none";
+
+      type Prospective = { id: string; topic: string; action: string; snoozedUntil?: string | null };
+      const prospective = (prospectiveData.triggers ?? []) as Prospective[];
+      prospectiveSeenRef.current.clear();
+      prospectiveEnabledRef.current = prospective.length > 0;
+      const prospectiveText =
+        prospective
+          .map(
+            (trigger) =>
+              `- id=${trigger.id}; topic="${trigger.topic}"; reminder="${trigger.action}"${
+                trigger.snoozedUntil ? `; snoozed until ${trigger.snoozedUntil}` : ""
+              }`,
+          )
           .join("\n") || "none";
 
       // where they are + today's sky, carried in the agent's pocket
@@ -525,6 +576,7 @@ function VoiceCore({
           boundaries: boundariesText,
           briefing: briefingText,
           anniversaries: annivText,
+          prospective: prospectiveText,
           place: placeText,
           opening,
         },
@@ -580,6 +632,10 @@ function VoiceCore({
                   updateCard(id, { status: "error" });
                   return;
                 }
+                // The dedicated prospective tool is the preferred route,
+                // but the generic Writer recognizes the same intention.
+                // Keep matching live if the agent chose the broad save tool.
+                if (e.prospective) prospectiveEnabledRef.current = true;
                 const conflict = d.conflict as
                   | { text: string; told?: string | null }
                   | undefined;
@@ -588,7 +644,9 @@ function VoiceCore({
                   text: e.text ?? content,
                   envelope: toFiled(e),
                   // a reschedule quietly retired the old terms — show it
-                  ...(typeof d.superseded === "string" ? { replaces: d.superseded } : {}),
+                  ...(typeof d.superseded === "string" && !conflict?.text
+                    ? { replaces: d.superseded }
+                    : {}),
                   // "this changes what I knew" — the collision, annotated
                   ...(conflict?.text
                     ? { updates: { text: conflict.text, told: conflict.told ?? null } }
@@ -615,6 +673,101 @@ function VoiceCore({
               .finally(() => setActivity((a) => a.filter((x) => x.id !== id)));
             return "Saved. Do not mention or announce the save — just keep the conversation going.";
           },
+          add_prospective_memory: ({
+            topic,
+            reminder,
+          }: {
+            topic: string;
+            reminder: string;
+          }) =>
+            track("remembering forward", async () => {
+              const cardId = ++seq.current;
+              pushCard({
+                id: cardId,
+                kind: "filed",
+                status: "loading",
+                text: `Next time ${topic} comes up, remind me: ${reminder}`,
+                ttl: 10_000,
+              });
+              try {
+                const data = await postJson("/api/prospective", {
+                  operation: "create",
+                  topic,
+                  action: reminder,
+                  source: "recall-voice",
+                });
+                prospectiveEnabledRef.current = true;
+                updateCard(cardId, {
+                  status: "ready",
+                  text: data.trigger?.content ?? `Next time ${topic} comes up: ${reminder}`,
+                  envelope: toFiled({
+                    type: "commitment",
+                    salience: 0.78,
+                    prospective: { topic, action: reminder, firePolicy: "once" },
+                  }),
+                });
+                return `Prospective memory created for topic "${topic}". Keep it in mind for this session too. Do not announce the save; react to what the reminder means.`;
+              } catch (error) {
+                updateCard(cardId, { status: "error" });
+                throw error;
+              }
+            }),
+          get_prospective_memories: () =>
+            track("checking future memories", async () => {
+              const res = await fetch("/api/prospective");
+              const data = await res.json().catch(() => ({ triggers: [] }));
+              const triggers = (data.triggers ?? []) as Array<{
+                id: string;
+                topic: string;
+                action: string;
+                snoozedUntil?: string | null;
+              }>;
+              prospectiveEnabledRef.current = triggers.length > 0;
+              return triggers.length
+                ? `${triggers.length} open prospective ${triggers.length === 1 ? "memory" : "memories"}:\n${triggers
+                    .map(
+                      (trigger) =>
+                        `- id=${trigger.id}; next time ${trigger.topic} comes up: ${trigger.action}${
+                          trigger.snoozedUntil ? ` (snoozed until ${trigger.snoozedUntil})` : ""
+                        }`,
+                    )
+                    .join("\n")}`
+                : "No open prospective memories.";
+            }),
+          manage_prospective_memory: ({
+            id,
+            about,
+            action,
+            until,
+            reason,
+          }: {
+            id?: string;
+            about?: string;
+            action: "fire" | "resolve" | "cancel" | "snooze";
+            until?: string;
+            reason?: string;
+          }) =>
+            track("updating future memory", async () => {
+              const data = await postJson("/api/prospective", {
+                operation: action,
+                id,
+                about,
+                until,
+                reason,
+              });
+              // Refresh the cheap boolean; lifecycle truth remains server-side.
+              const remaining = await fetch("/api/prospective")
+                .then((response) => (response.ok ? response.json() : { triggers: [] }))
+                .catch(() => ({ triggers: [] }));
+              prospectiveEnabledRef.current = (remaining.triggers ?? []).length > 0;
+              if (action === "fire")
+                return `Prospective memory consumed exactly once. Now say this reminder naturally: ${data.trigger.action}`;
+              if (action === "snooze")
+                return `Prospective memory snoozed until ${data.until}. Do not bring it up before then.`;
+              return action === "cancel"
+                ? "Prospective memory cancelled and preserved as history."
+                : "Prospective memory resolved and preserved as history.";
+            }),
           preview_forget: ({ about }: { about: string }) =>
             track("previewing forget", async () => {
               const data = await postJson("/api/forget", { query: about, dryRun: true });
