@@ -39,6 +39,7 @@ export const REQUESTED_MEMORY_KINDS = [
   "briefing",
 ] as const;
 export const CLAIM_MODALITIES = ["asserted", "hedged", "inferred"] as const;
+export const CLAIM_RELATION_HINTS = ["assert", "supersede", "retract"] as const;
 export const CLAIM_RELATIONS = [
   "supports",
   "extends",
@@ -61,6 +62,7 @@ export const SourceChannelSchema = z.enum(SOURCE_CHANNELS);
 export const SensitivitySchema = z.enum(SENSITIVITIES);
 export const RequestedMemoryKindSchema = z.enum(REQUESTED_MEMORY_KINDS);
 export const ClaimModalitySchema = z.enum(CLAIM_MODALITIES);
+export const ClaimRelationHintSchema = z.enum(CLAIM_RELATION_HINTS);
 export const ClaimRelationSchema = z.enum(CLAIM_RELATIONS);
 export const BeliefStatusSchema = z.enum(BELIEF_STATUSES);
 export const ConfidenceBandSchema = z.enum(CONFIDENCE_BANDS);
@@ -104,6 +106,14 @@ export const CaptureRequestSchema = z.object({
   idempotencyKey: z.string().trim().min(1).max(200).optional(),
 });
 
+export const CorrectionRequestSchema = z.object({
+  targetEventId: z.string().uuid(),
+  content: z.string().trim().min(1).max(256_000),
+  source: z.string().trim().min(1).max(200).default("recall-app#correction"),
+  userId: z.string().trim().min(1).max(120).default("local-user"),
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
+});
+
 export const CaptureEvidencePayloadSchema = z.object({
   content: z.string().min(1).max(256_000),
   redacted: z.boolean(),
@@ -139,6 +149,7 @@ export const MemoryEventSchema = z.object({
 export const MemoryReceiptSchema = z.object({
   eventId: z.string().uuid(),
   jobId: z.string().uuid(),
+  projectionJobId: z.string().uuid().optional(),
   recordedAt: InstantSchema,
   payloadHash: z.string().regex(/^[a-f0-9]{64}$/),
   contractVersion: z.literal(MEMORY_CONTRACT_VERSION),
@@ -155,6 +166,7 @@ export const MemoryClaimSchema = z.object({
   object: TypedValueSchema,
   polarity: z.union([z.literal(1), z.literal(-1)]),
   modality: ClaimModalitySchema,
+  relationHint: ClaimRelationHintSchema.default("assert"),
   validTime: TimeRangeSchema.nullable(),
   scope: ApplicabilityScopeSchema,
   extractorVersion: z.string().min(1).max(120),
@@ -165,6 +177,7 @@ export const BeliefSchema = z.object({
   subject: EntityRefSchema,
   predicate: z.string().min(1).max(200),
   value: TypedValueSchema,
+  polarity: z.union([z.literal(1), z.literal(-1)]),
   status: BeliefStatusSchema,
   confidence: ConfidenceBandSchema,
   validTime: TimeRangeSchema,
@@ -183,11 +196,13 @@ export type SourceChannel = z.infer<typeof SourceChannelSchema>;
 export type Sensitivity = z.infer<typeof SensitivitySchema>;
 export type RequestedMemoryKind = z.infer<typeof RequestedMemoryKindSchema>;
 export type CaptureRequest = z.infer<typeof CaptureRequestSchema>;
+export type CorrectionRequest = z.infer<typeof CorrectionRequestSchema>;
 export type CaptureEvidencePayload = z.infer<typeof CaptureEvidencePayloadSchema>;
 export type MemorySource = z.infer<typeof MemorySourceSchema>;
 export type MemoryEvent = z.infer<typeof MemoryEventSchema>;
 export type MemoryReceipt = z.infer<typeof MemoryReceiptSchema>;
 export type ClaimModality = z.infer<typeof ClaimModalitySchema>;
+export type ClaimRelationHint = z.infer<typeof ClaimRelationHintSchema>;
 export type ClaimRelation = z.infer<typeof ClaimRelationSchema>;
 export type BeliefStatus = z.infer<typeof BeliefStatusSchema>;
 export type ConfidenceBand = z.infer<typeof ConfidenceBandSchema>;

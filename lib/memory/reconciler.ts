@@ -29,6 +29,31 @@ async function processClaimedJob(
     const updated = ledger.markJobFailed(job.id, new Error(`canonical event ${job.eventId} missing`));
     return { state: updated.status === "dead" ? "dead" : "pending", error: updated.lastError ?? undefined };
   }
+  if (event.tombstonedAt) {
+    try {
+      const known = ledger.getMirror(event.id);
+      const externalId =
+        known?.status === "synced"
+          ? known.externalId
+          : await findCanonicalSupermemoryMirror(event.space, event.id);
+      if (externalId && !known) {
+        ledger.recordSupermemoryMirror({
+          eventId: event.id,
+          externalId,
+          payloadHash: event.payloadHash,
+        });
+      }
+      ledger.enqueueStateJob(event.id, "purge_mirror");
+      ledger.markJobSucceeded(job.id);
+      return { state: "already_succeeded", externalId: externalId ?? undefined };
+    } catch (error) {
+      const updated = ledger.markJobFailed(job.id, error);
+      return {
+        state: updated.status === "dead" ? "dead" : "pending",
+        error: updated.lastError ?? undefined,
+      };
+    }
+  }
   try {
     const knownMirror = ledger.getMirror(event.id);
     if (knownMirror) {
@@ -65,6 +90,19 @@ async function processClaimedJob(
       kind: payload.requested.kind,
       due: payload.requested.due ?? undefined,
     });
+    // A deletion may land while the provider call is in flight. Record the
+    // accepted document only long enough for the durable purge worker to find
+    // and remove it; never let the mirror resurrect deleted evidence.
+    if (ledger.getEvent(event.id)?.tombstonedAt) {
+      ledger.recordSupermemoryMirror({
+        eventId: event.id,
+        externalId: result.externalId,
+        payloadHash: event.payloadHash,
+      });
+      ledger.enqueueStateJob(event.id, "purge_mirror");
+      ledger.markJobSucceeded(job.id);
+      return { state: "already_succeeded", externalId: result.externalId };
+    }
     ledger.recordSupermemoryMirror({
       eventId: event.id,
       externalId: result.externalId,
