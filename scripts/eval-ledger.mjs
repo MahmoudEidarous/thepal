@@ -67,6 +67,25 @@ const check = (ok, label, detail = "") => {
 const cleanup = [];
 const canonicalCleanup = [];
 
+const futureDate = (days) => {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return {
+    iso: date.toLocaleDateString("en-CA"),
+    spoken: date.toLocaleDateString("en-US", {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }),
+  };
+};
+
+const originalAppointment = futureDate(7);
+const movedAppointment = futureDate(9);
+const xrayDeadline = futureDate(13);
+
 const providerId = async (data) => {
   const eventId = data.receipt?.eventId;
   if (!eventId || data.id !== eventId) return data.id;
@@ -91,7 +110,7 @@ const deleteCanonical = async (eventId) => {
 
 // ── reschedule: a new telling retires the old terms ────────────────
 const a = await post("/api/capture", {
-  content: "eval-ledger: dentist appointment on Tuesday July 14th at 3pm",
+  content: `eval-ledger: dentist appointment on ${originalAppointment.spoken} at 3pm`,
   space: "eval",
   source: "eval-ledger",
 });
@@ -102,7 +121,7 @@ check(a.status === 200 && a.data.envelope?.type === "commitment", "plants an ope
 await settle(aId);
 
 const b = await post("/api/capture", {
-  content: "My dentist appointment is actually going to be Thursday July 16th, not Tuesday",
+  content: `My dentist appointment is actually going to be ${movedAppointment.spoken}, not ${originalAppointment.spoken}`,
   space: "eval",
   source: "eval-ledger",
 });
@@ -128,7 +147,7 @@ check(!!newDoc.metadata?.updatesTold, "lineage keeps when the prior telling was 
 {
   const dentist = (await evalAgenda()).filter((c) => /dentist/i.test(c.content));
   check(
-    dentist.length === 1 && dentist[0].due === "2026-07-16",
+    dentist.length === 1 && dentist[0].due === movedAppointment.iso,
     "the agenda nags exactly once, with the new date",
     JSON.stringify(dentist.map((d) => d.due)),
   );
@@ -136,7 +155,7 @@ check(!!newDoc.metadata?.updatesTold, "lineage keeps when the prior telling was 
 
 // ── a different errand for the same person must NOT supersede ──────
 const c = await post("/api/capture", {
-  content: "Pick up the X-ray results from the dentist's office by July 20th",
+  content: `Pick up the X-ray results from the dentist's office by ${xrayDeadline.spoken}`,
   space: "eval",
   source: "eval-ledger",
 });
@@ -191,7 +210,10 @@ check(
 );
 
 // ── completion: done stays done ─────────────────────────────────────
-const dn = await post("/api/agenda/complete", { q: "dentist appointment thursday", space: "eval" });
+const dn = await post("/api/agenda/complete", {
+  q: `dentist appointment ${movedAppointment.spoken}`,
+  space: "eval",
+});
 check(dn.status === 200 && dn.data.outcome === "done", "done closes with outcome=done");
 if (dn.data.receipt?.eventId) canonicalCleanup.push(dn.data.receipt.eventId);
 
@@ -225,7 +247,7 @@ if (dn.data.receipt?.eventId) canonicalCleanup.push(dn.data.receipt.eventId);
   const l = await ledgerView();
   check(
     ![...(l.open ?? []), ...(l.done ?? [])].some((x) =>
-      /x-ray|tuesday july 14/i.test(x.content),
+      /x-ray|eval-ledger/i.test(x.content),
     ),
     "superseded and cancelled items leave the ledger entirely",
   );

@@ -1,6 +1,7 @@
 import type { WorkingTurn } from "@/lib/memory/context-compiler";
 import { compileMemoryContextWithAttention } from "@/lib/memory/attention-service";
 import type { AttentionMomentKind } from "@/lib/memory/attention-engine";
+import { formatKnowledgeRoute, routeKnowledgeTurn } from "@/lib/knowledge-router";
 import { apiError, asSpace } from "@/lib/validate";
 
 export const runtime = "nodejs";
@@ -31,6 +32,8 @@ export async function POST(request: Request) {
       body.momentKind === "session_start" || body.momentKind === "lull"
         ? body.momentKind
         : "user_turn";
+    const turns = recentTurns(body.recentTurns);
+    const selectedMemory = typeof body.selectedMemory === "string" ? body.selectedMemory : null;
     const context = await compileMemoryContextWithAttention({
       query,
       space: asSpace(body.space),
@@ -38,8 +41,8 @@ export async function POST(request: Request) {
       momentKind,
       explicitSilence: body.explicitSilence === true,
       focusMode: body.focusMode === true,
-      recentTurns: recentTurns(body.recentTurns),
-      selectedMemory: typeof body.selectedMemory === "string" ? body.selectedMemory : null,
+      recentTurns: turns,
+      selectedMemory,
       maxTokens: typeof body.maxTokens === "number" ? body.maxTokens : undefined,
       seenProspective: Array.isArray(body.seenProspective)
         ? body.seenProspective.filter((id: unknown): id is string => typeof id === "string").slice(0, 50)
@@ -50,7 +53,42 @@ export async function POST(request: Request) {
       includeObligations: body.includeObligations !== false,
       includeAnniversaries: body.includeAnniversaries !== false,
     });
-    return Response.json(context);
+    const degraded = new Set(context.degradedSources);
+    const coverage = {
+      selectedMemory: !!selectedMemory,
+      canonicalItems:
+        context.currentBeliefs.length + context.uncertainty.length + context.safety.length,
+      threadItems: context.activeThreads.length,
+      structuredItems: context.obligations.length + context.prospective.length,
+      historicalItems: context.historicalEvidence.length,
+      continuityItems: context.continuityViews.length,
+      semanticHistoryChecked:
+        body.includeHistory !== false && query.trim().length >= 3 && !degraded.has("semantic history"),
+      commitmentsChecked:
+        body.includeObligations !== false && !degraded.has("commitment ledger"),
+      prospectiveChecked:
+        body.includeProspective !== false && !!query.trim() && !degraded.has("prospective memory"),
+      degradedSources: context.degradedSources,
+    };
+    const knowledgeRoute = routeKnowledgeTurn({
+      query,
+      recentTurns: turns,
+      selectedMemory,
+      coverage,
+    });
+    const routeText = formatKnowledgeRoute(knowledgeRoute);
+    return Response.json({
+      ...context,
+      knowledgeRoute,
+      knowledgeManifest: {
+        contractVersion: 1,
+        routerVersion: knowledgeRoute.routerVersion,
+        currentTurn: true,
+        coverage,
+        requiredSources: knowledgeRoute.requiredSources,
+      },
+      agentText: [context.agentText, routeText].filter(Boolean).join("\n\n"),
+    });
   } catch (error) {
     return apiError(error);
   }

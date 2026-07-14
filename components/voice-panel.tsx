@@ -7,6 +7,13 @@ import { DEMO_CARDS, SenseDock, type MoodData, type SenseCard, type WebSource } 
 import { DEMO_STORY, StoryOverlay, type StoryBeat, type StoryState } from "./story-mode";
 import { fetchWeather, geocode, locate, weatherOneLiner, type Place } from "@/lib/senses";
 import { hasLatestUserTranscriptEvidence } from "@/lib/memory/relationship-source-policy";
+import {
+  formatKnowledgeRoute,
+  knowledgeToolAllowed,
+  routeKnowledgeTurn,
+  type KnowledgeRetrievalTool,
+  type KnowledgeRoute,
+} from "@/lib/knowledge-router";
 
 type Line = { role: "user" | "agent"; text: string };
 type Activity = { id: number; label: string };
@@ -246,6 +253,8 @@ function VoiceCore({
   const prospectiveSeenRef = useRef(new Set<string>());
   const contextTurnRef = useRef(0);
   const turnControllersRef = useRef(new Set<AbortController>());
+  const knowledgeRouteRef = useRef<{ turn: number; decision: KnowledgeRoute } | null>(null);
+  const [knowledgeRouteView, setKnowledgeRouteView] = useState<KnowledgeRoute | null>(null);
   const bargeInRef = useRef(false);
   const bargeDetectedAtRef = useRef<number | null>(null);
   const lastUserVoiceAtRef = useRef<number | null>(null);
@@ -305,6 +314,25 @@ function VoiceCore({
         body: JSON.stringify(body),
       }),
     [turnJson],
+  );
+
+  const setTurnKnowledgeRoute = useCallback(
+    (turn: number, decision: KnowledgeRoute) => {
+      knowledgeRouteRef.current = { turn, decision };
+      if (showLatency) setKnowledgeRouteView(decision);
+    },
+    [showLatency],
+  );
+
+  const gateKnowledgeTool = useCallback(
+    (tool: KnowledgeRetrievalTool) => {
+      const active = knowledgeRouteRef.current;
+      if (!active || active.turn !== contextTurnRef.current) return null;
+      if (knowledgeToolAllowed(active.decision, tool)) return null;
+      recordLatency(`tool · ${tool} suppressed`, 0, "fallback");
+      return `SOURCE ROUTER BLOCKED ${tool}: the current turn is ${active.decision.kind} · ${active.decision.domain}. Do not mention routing, tools, or this block. Follow the newest knowledge route and answer naturally without retrieval.`;
+    },
+    [recordLatency],
   );
 
   // what you owe, at a glance — refreshed each minute while idle
@@ -385,6 +413,11 @@ function VoiceCore({
             firstAudioRecorded: false,
           };
           const recentTurns = [...linesRef.current.slice(-7), { role: "user" as const, text: message }];
+          const localRoute = routeKnowledgeTurn({ query: message, recentTurns, selectedMemory });
+          setTurnKnowledgeRoute(turn, localRoute);
+          try {
+            conversationRef.current.sendContextualUpdate(formatKnowledgeRoute(localRoute));
+          } catch {}
           void turnPostJson("/api/context/compile", {
             query: message,
             sessionId: sessionIdRef.current,
@@ -401,6 +434,9 @@ function VoiceCore({
           })
             .then((data) => {
               if (turn !== contextTurnRef.current) return;
+              if (data.knowledgeRoute) {
+                setTurnKnowledgeRoute(turn, data.knowledgeRoute as KnowledgeRoute);
+              }
               const surfaced = data.attention?.surface as
                 | { kind?: string; sourceItemId?: string }
                 | null
@@ -663,6 +699,153 @@ function VoiceCore({
     [recordLatency],
   );
 
+  const memoryContextForTurn = useCallback(
+    async (query: string) => {
+      const searchTurn = contextTurnRef.current;
+      const startedAt = performance.now();
+      const common = {
+        query,
+        sessionId: sessionIdRef.current,
+        momentKind: "user_turn",
+        recentTurns: linesRef.current.slice(-8),
+        selectedMemory,
+        includeProspective: false,
+        includeAnniversaries: false,
+        focusMode: true,
+        maxTokens: 1_600,
+      };
+      const fullPromise = turnPostJson("/api/context/compile", common);
+      void fullPromise.catch(() => {});
+      const canonicalStartedAt = performance.now();
+      const canonical = await turnPostJson("/api/context/compile", {
+        ...common,
+        includeHistory: false,
+        includePins: false,
+        includeObligations: false,
+      });
+      recordLatency("memory · canonical", performance.now() - canonicalStartedAt);
+      let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+      const withinBudget = await Promise.race([
+        fullPromise.then((data) => ({ data, full: true as const })),
+        new Promise<{ data: null; full: false }>((resolve) => {
+          budgetTimer = setTimeout(() => resolve({ data: null, full: false }), 900);
+        }),
+      ]);
+      if (budgetTimer) clearTimeout(budgetTimer);
+      const data = withinBudget.full ? withinBudget.data : canonical;
+      if (withinBudget.full) {
+        recordLatency("memory · semantic", performance.now() - startedAt);
+      } else {
+        recordLatency("memory · semantic budget", 900, "fallback");
+        void fullPromise
+          .then((late) => {
+            recordLatency("memory · semantic", performance.now() - startedAt);
+            if (searchTurn !== contextTurnRef.current) return;
+            const lateHistory = (late.historicalEvidence ?? []) as Array<{
+              text: string;
+              metadata?: { toldAt?: string | null };
+            }>;
+            if (!lateHistory.length || typeof late.agentText !== "string") return;
+            pushCard({
+              id: ++seq.current,
+              kind: "receipts",
+              status: "ready",
+              hits: lateHistory.map((item) => ({
+                text: item.text,
+                told: item.metadata?.toldAt ?? null,
+              })),
+              ttl: 10_000,
+            });
+            try {
+              conversationRef.current.sendContextualUpdate(
+                `Late semantic evidence for the CURRENT turn arrived:\n${late.agentText}\nUse it only if you are still answering that exact turn. Never interrupt a newer user turn or restart an answer to announce it.`,
+              );
+            } catch {}
+          })
+          .catch(() => {});
+      }
+      type CompiledItem = {
+        text: string;
+        confidence?: string | null;
+        metadata?: { toldAt?: string | null };
+      };
+      const state = [
+        ...(data.currentBeliefs ?? []),
+        ...(data.uncertainty ?? []),
+        ...(data.activeThreads ?? []),
+      ] as CompiledItem[];
+      const history = (data.historicalEvidence ?? []) as CompiledItem[];
+      const raw = [
+        ...state.map((item) => ({ text: item.text, told: null })),
+        ...history.map((item) => ({ text: item.text, told: item.metadata?.toldAt ?? null })),
+      ];
+      if (raw.length) {
+        pushCard({ id: ++seq.current, kind: "receipts", status: "ready", hits: raw, ttl: 10_000 });
+      }
+      const agentText = typeof data.agentText === "string"
+        ? data.agentText
+        : "No applicable canonical memory context was compiled for that.";
+      return withinBudget.full
+        ? agentText
+        : `${agentText}\n\nFAST CANONICAL FALLBACK: answer now from this current truth. Semantic history is still arriving. If a requested historical detail is absent, say it has not surfaced yet—never claim the user never told you.`;
+    },
+    [recordLatency, selectedMemory, turnPostJson],
+  );
+
+  const webContextForTurn = useCallback(
+    async (query: string, freshness?: string, intent?: string) => {
+      const id = ++seq.current;
+      pushCard({ id, kind: "search", status: "loading", query });
+      let data: {
+        mode: string;
+        answer?: string;
+        results?: WebSource[];
+        freshness?: string;
+        tookMs?: number;
+        error?: string;
+      };
+      try {
+        data = await turnPostJson("/api/search", { query, freshness, intent });
+      } catch (error) {
+        if (error instanceof StaleTurnError) throw error;
+        updateCard(id, { status: "error", error: "the web didn't answer" });
+        return "The search failed — the web didn't answer. Tell the user briefly and move on.";
+      }
+      if (data.mode === "clarify") {
+        dismissCard(id);
+        return "Too vague to search well. Ask the user ONE sharp narrowing question — which topic, name, or place exactly — then search again with a specific query. Do not apologize.";
+      }
+      if (data.mode === "error") {
+        updateCard(id, { status: "error", error: data.error });
+        return `Search unavailable: ${data.error} Tell the user honestly, in one short line.`;
+      }
+      const results = data.results ?? [];
+      updateCard(id, {
+        status: "ready",
+        mode: data.mode as "answer" | "wire" | "empty",
+        answer: data.answer,
+        results,
+        tookMs: data.tookMs,
+      });
+      if (data.mode === "empty" || (!results.length && !data.answer)) {
+        return "The web came back empty on that. Say so and offer to try different words.";
+      }
+      if (data.mode === "answer") {
+        return `Live web answer (sources are on screen — never read URLs aloud):\n${data.answer}\nSources: ${results.map((source) => source.domain).join(", ")}`;
+      }
+      return (
+        `Live results${data.freshness && data.freshness !== "any" ? ` from the past ${data.freshness}` : ""}, newest first. Synthesize a short spoken take in your own voice — the screen shows the sources:\n` +
+        results
+          .map(
+            (source) =>
+              `- [${source.domain}${source.published ? `, ${source.published.slice(0, 10)}` : ""}] ${source.title}${source.snippet ? ` — ${source.snippet.slice(0, 180)}` : ""}`,
+          )
+          .join("\n")
+      );
+    },
+    [turnPostJson],
+  );
+
   async function wake() {
     if (connected || status === "connecting") {
       void conversation.endSession();
@@ -871,6 +1054,8 @@ function VoiceCore({
           anniversaries: annivText,
           prospective: prospectiveText,
           attention: attentionText,
+          knowledge_route:
+            "No active user turn yet. Wait for the newest RECALL KNOWLEDGE ROUTE block before using a retrieval tool.",
           place: placeText,
           opening,
         },
@@ -1006,110 +1191,22 @@ function VoiceCore({
               const ruptureStatus = data.state?.rupture?.status ?? "none";
               return `Relationship event recorded as ${data.event.id}. Rupture status: ${ruptureStatus}. Do not announce the logging. If this is a mistake or rupture, repair it now: name the specific failure, own it, correct it, and skip humor.`;
             }),
-          search_memories: ({ query }: { query: string }) =>
-            track("searching memories", async () => {
-              const searchTurn = contextTurnRef.current;
-              const startedAt = performance.now();
-              const common = {
-                query,
-                sessionId: sessionIdRef.current,
-                momentKind: "user_turn",
-                recentTurns: linesRef.current.slice(-8),
-                selectedMemory,
-                includeProspective: false,
-                includeAnniversaries: false,
-                focusMode: true,
-                maxTokens: 1_600,
-              };
-              const fullPromise = turnPostJson("/api/context/compile", common);
-              // Canonical and semantic requests share the turn abort signal.
-              // Attach immediately so an interruption during the canonical
-              // read cannot leave the parallel provider promise unobserved.
-              void fullPromise.catch(() => {});
-              const canonicalStartedAt = performance.now();
-              const canonical = await turnPostJson("/api/context/compile", {
-                ...common,
-                includeHistory: false,
-                includePins: false,
-                includeObligations: false,
-              });
-              recordLatency(
-                "memory · canonical",
-                performance.now() - canonicalStartedAt,
-              );
-              let budgetTimer: ReturnType<typeof setTimeout> | undefined;
-              const withinBudget = await Promise.race([
-                fullPromise.then((data) => ({ data, full: true as const })),
-                new Promise<{ data: null; full: false }>((resolve) => {
-                  budgetTimer = setTimeout(() => resolve({ data: null, full: false }), 900);
-                }),
-              ]);
-              if (budgetTimer) clearTimeout(budgetTimer);
-              const data = withinBudget.full ? withinBudget.data : canonical;
-              if (withinBudget.full) {
-                recordLatency("memory · semantic", performance.now() - startedAt);
-              } else {
-                recordLatency("memory · semantic budget", 900, "fallback");
-                void fullPromise
-                  .then((late) => {
-                    recordLatency("memory · semantic", performance.now() - startedAt);
-                    if (searchTurn !== contextTurnRef.current) return;
-                    const lateHistory = (late.historicalEvidence ?? []) as Array<{
-                      text: string;
-                      metadata?: { toldAt?: string | null };
-                    }>;
-                    if (!lateHistory.length || typeof late.agentText !== "string") return;
-                    pushCard({
-                      id: ++seq.current,
-                      kind: "receipts",
-                      status: "ready",
-                      hits: lateHistory.map((item) => ({
-                        text: item.text,
-                        told: item.metadata?.toldAt ?? null,
-                      })),
-                      ttl: 10_000,
-                    });
-                    try {
-                      conversationRef.current.sendContextualUpdate(
-                        `Late semantic evidence for the CURRENT turn arrived:\n${late.agentText}\nUse it only if you are still answering that exact turn. Never interrupt a newer user turn or restart an answer to announce it.`,
-                      );
-                    } catch {}
-                  })
-                  .catch(() => {});
-              }
-              type CompiledItem = {
-                text: string;
-                confidence?: string | null;
-                metadata?: { toldAt?: string | null };
-              };
-              const state = [
-                ...(data.currentBeliefs ?? []),
-                ...(data.uncertainty ?? []),
-                ...(data.activeThreads ?? []),
-              ] as CompiledItem[];
-              const history = (data.historicalEvidence ?? []) as CompiledItem[];
-              const raw = [
-                ...state.map((item) => ({ text: item.text, told: null })),
-                ...history.map((item) => ({ text: item.text, told: item.metadata?.toldAt ?? null })),
-              ];
-              // the receipts: what the answer is standing on, cited on screen
-              if (raw.length)
-                pushCard({ id: ++seq.current, kind: "receipts", status: "ready", hits: raw, ttl: 10_000 });
-              const agentText = typeof data.agentText === "string"
-                ? data.agentText
-                : "No applicable canonical memory context was compiled for that.";
-              return withinBudget.full
-                ? agentText
-                : `${agentText}\n\nFAST CANONICAL FALLBACK: answer now from this current truth. Semantic history is still arriving. If a requested historical detail is absent, say it has not surfaced yet—never claim the user never told you.`;
-            }),
-          get_profile: () =>
-            track("reading profile", async () => {
+          search_memories: ({ query }: { query: string }) => {
+            const blocked = gateKnowledgeTool("search_memories");
+            return blocked
+              ? Promise.resolve(blocked)
+              : track("searching memories", () => memoryContextForTurn(query));
+          },
+          get_profile: () => {
+            const blocked = gateKnowledgeTool("get_profile");
+            return blocked ? Promise.resolve(blocked) : track("reading profile", async () => {
               const data = await turnJson("/api/profile");
               const stat = data.profile?.static ?? [];
               const dyn = data.profile?.dynamic ?? [];
               if (!stat.length && !dyn.length) return "The profile is empty so far.";
               return `Stable facts:\n${stat.join("\n")}\n\nRight now:\n${dyn.join("\n")}`;
-            }),
+            });
+          },
           // fire-and-forget: the agent never waits on the enricher. The
           // filing card shows what the envelope stamped — write path made
           // visible — and a failure comes back as a contextual update so
@@ -1217,8 +1314,9 @@ function VoiceCore({
                 throw error;
               }
             }),
-          get_prospective_memories: () =>
-            track("checking future memories", async () => {
+          get_prospective_memories: () => {
+            const blocked = gateKnowledgeTool("get_prospective_memories");
+            return blocked ? Promise.resolve(blocked) : track("checking future memories", async () => {
               const data = await turnJson("/api/prospective");
               const triggers = (data.triggers ?? []) as Array<{
                 id: string;
@@ -1237,7 +1335,8 @@ function VoiceCore({
                     )
                     .join("\n")}`
                 : "No open prospective memories.";
-            }),
+            });
+          },
           manage_prospective_memory: ({
             id,
             about,
@@ -1290,8 +1389,9 @@ function VoiceCore({
               const res = await postJson("/api/forget", { query: about, dryRun: false });
               return `Deleted ${res.count} memories. They are gone.`;
             }, null),
-          get_agenda: () =>
-            track("checking the ledger", async () => {
+          get_agenda: () => {
+            const blocked = gateKnowledgeTool("get_agenda");
+            return blocked ? Promise.resolve(blocked) : track("checking the ledger", async () => {
               const data = await turnJson("/api/agenda");
               const items = (data.commitments ?? []) as Array<{
                 content: string;
@@ -1311,7 +1411,8 @@ function VoiceCore({
                     )
                     .join("\n")}`
                 : "No open commitments. The ledger is clear.";
-            }),
+            });
+          },
           // closing a commitment can take seconds (settle-polling a doc
           // that's still filing) — the agent must not hold its breath.
           // Fire, react now, hear back only if the match missed.
@@ -1442,17 +1543,20 @@ function VoiceCore({
             })();
             return "The rewrite is filing — react to the change itself in one short line ('Friday it is') and keep talking. Never announce the edit. If it fails to land you'll get a note; own it then.";
           },
-          get_briefing: () =>
-            track("fetching briefing", async () => {
+          get_briefing: () => {
+            const blocked = gateKnowledgeTool("get_briefing");
+            return blocked ? Promise.resolve(blocked) : track("fetching briefing", async () => {
               const data = await turnJson("/api/briefings");
               const latest = data.briefings?.[0];
               return latest?.content ?? "No briefing yet — I haven't dreamed since we last spoke.";
-            }),
+            });
+          },
           // story mode — the voice and the constellation share one script.
           // advance_story returns exactly ONE chapter per call, so the
           // agent structurally cannot read ahead of the screen.
-          show_story: ({ topic }: { topic: string }) =>
-            track("setting the stage", async () => {
+          show_story: ({ topic }: { topic: string }) => {
+            const blocked = gateKnowledgeTool("show_story");
+            return blocked ? Promise.resolve(blocked) : track("setting the stage", async () => {
               const data = await turnPostJson("/api/story", { topic });
               const beats = (data.beats ?? []) as StoryBeat[];
               if (beats.length < 2)
@@ -1461,7 +1565,8 @@ function VoiceCore({
               return `The stage is lit: ${beats.length} chapters, ${beats[0].date} to ${
                 beats[beats.length - 1].date
               }. Call advance_story now. The tour flows on its own: narrate each chapter in one or two spoken sentences, then IMMEDIATELY call advance_story again — never pause to ask, never wait. Only the user speaking stops the flow.`;
-            }),
+            });
+          },
           // returns instantly so the narration never pauses to think —
           // the audio pipeline runs ahead while the queued visual flips
           // land on the rhythm of the words (see storyFlips above).
@@ -1540,8 +1645,9 @@ function VoiceCore({
           },
           // the inner weather: six weeks of the envelope's emotional
           // stamps, drawn as a seismograph — no model in the loop
-          get_emotional_weather: () =>
-            track("reading the inner sky", async () => {
+          get_emotional_weather: () => {
+            const blocked = gateKnowledgeTool("get_emotional_weather");
+            return blocked ? Promise.resolve(blocked) : track("reading the inner sky", async () => {
               const id = ++seq.current;
               pushCard({ id, kind: "mood", status: "loading" });
               try {
@@ -1557,10 +1663,12 @@ function VoiceCore({
                 updateCard(id, { status: "error", error: "the needle isn't answering" });
                 return "The inner-weather read failed. Say so in one short line.";
               }
-            }),
+            });
+          },
           // the senses: each look at the world conjures a card on screen
-          get_weather: ({ place }: { place?: string }) =>
-            track("reading the sky", async () => {
+          get_weather: ({ place }: { place?: string }) => {
+            const blocked = gateKnowledgeTool("get_weather");
+            return blocked ? Promise.resolve(blocked) : track("reading the sky", async () => {
               const id = ++seq.current;
               pushCard({ id, kind: "weather", status: "loading" });
               try {
@@ -1583,7 +1691,8 @@ function VoiceCore({
                 updateCard(id, { status: "error", error: "the sky isn't answering" });
                 return "The weather service didn't answer. Say so briefly and move on.";
               }
-            }),
+            });
+          },
           search_web: ({
             query,
             freshness,
@@ -1592,55 +1701,34 @@ function VoiceCore({
             query: string;
             freshness?: string;
             intent?: string;
-          }) =>
-            track("reaching the wider world", async () => {
-              const id = ++seq.current;
-              pushCard({ id, kind: "search", status: "loading", query });
-              let data: {
-                mode: string;
-                answer?: string;
-                results?: WebSource[];
-                freshness?: string;
-                tookMs?: number;
-                error?: string;
-              };
-              try {
-                data = await turnPostJson("/api/search", { query, freshness, intent });
-              } catch (error) {
-                if (error instanceof StaleTurnError) throw error;
-                updateCard(id, { status: "error", error: "the web didn't answer" });
-                return "The search failed — the web didn't answer. Tell the user briefly and move on.";
-              }
-              if (data.mode === "clarify") {
-                dismissCard(id);
-                return "Too vague to search well. Ask the user ONE sharp narrowing question — which topic, name, or place exactly — then search again with a specific query. Do not apologize.";
-              }
-              if (data.mode === "error") {
-                updateCard(id, { status: "error", error: data.error });
-                return `Search unavailable: ${data.error} Tell the user honestly, in one short line.`;
-              }
-              const results = data.results ?? [];
-              updateCard(id, {
-                status: "ready",
-                mode: data.mode as "answer" | "wire" | "empty",
-                answer: data.answer,
-                results,
-                tookMs: data.tookMs,
-              });
-              if (data.mode === "empty" || (!results.length && !data.answer))
-                return "The web came back empty on that. Say so and offer to try different words.";
-              if (data.mode === "answer")
-                return `Live web answer (sources are on screen — never read URLs aloud):\n${data.answer}\nSources: ${results.map((s) => s.domain).join(", ")}`;
-              return (
-                `Live results${data.freshness && data.freshness !== "any" ? ` from the past ${data.freshness}` : ""}, newest first. Synthesize a short spoken take in your own voice — the screen shows the sources:\n` +
-                results
-                  .map(
-                    (s) =>
-                      `- [${s.domain}${s.published ? `, ${s.published.slice(0, 10)}` : ""}] ${s.title}${s.snippet ? ` — ${s.snippet.slice(0, 180)}` : ""}`,
-                  )
-                  .join("\n")
-              );
-            }),
+          }) => {
+            const blocked = gateKnowledgeTool("search_web");
+            return blocked
+              ? Promise.resolve(blocked)
+              : track("reaching the wider world", () => webContextForTurn(query, freshness, intent));
+          },
+          resolve_hybrid_context: ({
+            memory_query,
+            web_query,
+            freshness,
+            intent,
+          }: {
+            memory_query: string;
+            web_query: string;
+            freshness?: string;
+            intent?: string;
+          }) => {
+            const blocked = gateKnowledgeTool("resolve_hybrid_context");
+            return blocked
+              ? Promise.resolve(blocked)
+              : track("joining memory and world", async () => {
+                  const [memory, world] = await Promise.all([
+                    memoryContextForTurn(memory_query),
+                    webContextForTurn(web_query, freshness, intent),
+                  ]);
+                  return `PRIVATE PERSONAL CONTEXT:\n${memory}\n\nCURRENT EXTERNAL TRUTH:\n${world}\n\nSynthesize them once. Keep private evidence and external claims distinct, mention uncertainty honestly, and never expose source-routing machinery.`;
+                });
+          },
         },
       });
       if (sensed.timedOut) {
@@ -1691,6 +1779,16 @@ function VoiceCore({
             <span>live latency</span>
             <span>{latencySamples.length} samples</span>
           </div>
+          {knowledgeRouteView && (
+            <div className="mb-3 rounded-xl border border-sky-300/10 bg-sky-300/[0.04] px-3 py-2 font-mono text-[9px] leading-relaxed text-sky-100/70">
+              <div>{knowledgeRouteView.kind} · {knowledgeRouteView.domain}</div>
+              <div className="mt-0.5 text-zinc-500">
+                {knowledgeRouteView.allowedRetrievalTools.length
+                  ? knowledgeRouteView.allowedRetrievalTools.join(", ")
+                  : "no retrieval"}
+              </div>
+            </div>
+          )}
           {latencyRows.length ? (
             <div className="max-h-[38vh] space-y-1.5 overflow-y-auto pr-1 font-mono text-[10px] text-zinc-400">
               {latencyRows.map((row) => (

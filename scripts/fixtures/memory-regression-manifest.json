@@ -73,6 +73,12 @@
       "command": "npm run eval:memory-hardening",
       "expected": "23 checks passing",
       "successMarker": "23 memory-hardening checks passed"
+    },
+    {
+      "name": "knowledge source routing and tool authority",
+      "command": "npm run eval:knowledge-router",
+      "expected": "162 checks passing",
+      "successMarker": "162 knowledge-router checks passed"
     }
   ]
 }

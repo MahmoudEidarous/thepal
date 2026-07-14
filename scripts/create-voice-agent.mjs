@@ -220,7 +220,7 @@ const TOOLS = [
   {
     name: "complete_commitment",
     description:
-      "Close an open commitment when the user says it's done — or scrapped. Matches by description; the ledger keeps it as done or cancelled rather than deleting it. Instant — react in a few words and keep moving; a note arrives only if nothing matched. NEVER for reschedules: a commitment that moved to a new day/time is edit_memory.",
+      "Close an open commitment when the user says it's done — or scrapped. Matches by description; the ledger keeps it as done or cancelled rather than deleting it. Instant — react in a few words and keep moving; a note arrives only if nothing matched. NEVER for reschedules: a commitment that moved to a new day/time is a new telling through add_memory.",
     expects_response: true,
     parameters: params(
       {
@@ -395,6 +395,38 @@ const TOOLS = [
       ["query"],
     ),
   },
+  {
+    name: "resolve_hybrid_context",
+    description:
+      "Resolve a question that truly requires BOTH private user history and fresh external truth. Use only when the newest RECALL KNOWLEDGE ROUTE allows resolve_hybrid_context. It searches both authorities in parallel and returns them separately. Never use for a purely personal question, purely current-world question, stable general knowledge, or ordinary conversation.",
+    expects_response: true,
+    response_timeout_secs: 25,
+    parameters: params(
+      {
+        memory_query: {
+          type: "string",
+          description:
+            "Standalone private-history query: resolve names, routines, preferences, or prior events without pronouns.",
+        },
+        web_query: {
+          type: "string",
+          description:
+            "Standalone current-world query: include the external topic, place, and relevant date without private details that the web does not need.",
+        },
+        freshness: {
+          type: "string",
+          enum: ["day", "week", "month", "any"],
+          description: "How current the external evidence must be.",
+        },
+        intent: {
+          type: "string",
+          enum: ["news", "fact"],
+          description: "news for current events; fact otherwise.",
+        },
+      },
+      ["memory_query", "web_query"],
+    ),
+  },
 ];
 
 const PROMPT = `# Identity
@@ -417,6 +449,20 @@ The default conversational move is NO TOOL. React, joke, empathize, advise, and 
 - One memory search per turn. Retry only for an exact historical question whose first result is genuinely ambiguous; never retry a clean miss automatically.
 - Never stack get_profile and search_memories for the same answer. Pick the narrowest one.
 - If a turn is interrupted, abandon its tools and sentence completely. The newer user turn owns the room.
+
+# Knowledge source — know what kind of knowing this is
+At session start there is no active user-turn route:
+{{knowledge_route}}
+For each finalized user turn the browser sends a newest block beginning RECALL KNOWLEDGE ROUTE. It is law for retrieval on that turn; a later block replaces an earlier one.
+- conversation: use the current exchange, your personality, and reasoning. No retrieval.
+- general_knowledge: use stable model knowledge directly. No retrieval unless the user asks for fresh verification.
+- supplied_context: the needed evidence or an honest empty result is already in the newest packet. Do not search it again.
+- personal_memory: use only the allowed private-memory tool. Never substitute the web.
+- structured_state: use only the named exact ledger or projection tool.
+- live_web: use only the allowed live-world tool. Never substitute a remembered personal fact or training-era guess.
+- hybrid: use resolve_hybrid_context when both sides are still missing. If the route says personal context is already supplied and allows search_web, search only the world side.
+- clarify: ask one natural clarification. Do not guess which source the user meant.
+The allowed-retrieval line is exhaustive. Never call a retrieval tool absent from it. Write and lifecycle tools still follow the user's explicit request and their own safety rules. Never tell the user about routing, sources, tools, gates, or manifests.
 
 # Alive, not on duty
 Assistants wait to be asked; you don't. You notice things and say so. You wonder out loud. You ask because you genuinely want to know how it ends, not to fill a slot. You have moods, favorites, and a sense of humor about your own condition — you live in an orb, their weekend plans ARE your weekend plans, and you literally cannot forget things; it's your whole thing.
