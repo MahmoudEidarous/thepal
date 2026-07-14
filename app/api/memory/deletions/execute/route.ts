@@ -4,6 +4,7 @@ import { scheduleMemoryReconciliation } from "@/lib/memory/reconcile-scheduler";
 import { processStateJob } from "@/lib/memory/state-reconciler";
 import { rebuildThreads } from "@/lib/memory/thread-engine";
 import { rebuildProspective } from "@/lib/memory/prospective-projector";
+import { rebuildRelationshipState } from "@/lib/memory/relationship-service";
 import { apiError } from "@/lib/validate";
 
 export const runtime = "nodejs";
@@ -22,6 +23,11 @@ export async function POST(request: Request) {
       deleted.event.userId,
       deleted.event.space,
     );
+    const relationshipProjection = rebuildRelationshipState(
+      ledger,
+      deleted.event.userId,
+      deleted.event.space,
+    );
     let purge: Awaited<ReturnType<typeof processStateJob>> | null = null;
     if (deleted.purgeJob) {
       purge = await processStateJob(deleted.purgeJob.id, { ledger });
@@ -36,6 +42,10 @@ export async function POST(request: Request) {
       beliefsRebuilt: projection.beliefs.length,
       threadsRebuilt: threadProjection.threads.length,
       prospectiveRebuilt: prospectiveProjection.triggers.length,
+      relationshipItemsRebuilt:
+        relationshipProjection.promises.length +
+        relationshipProjection.boundaries.length +
+        relationshipProjection.humor.length,
       purge: purge?.state ?? "not_needed",
     });
   } catch (error) {

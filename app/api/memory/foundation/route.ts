@@ -25,6 +25,8 @@ function publicStats() {
     threadTransitions: stats.threadTransitions,
     prospective: stats.prospective,
     attentionDecisions: stats.attentionDecisions,
+    relationshipEvents: stats.relationshipEvents,
+    relationshipStates: stats.relationshipStates,
     mirrors: stats.mirrors,
   };
 }

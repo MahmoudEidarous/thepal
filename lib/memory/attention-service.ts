@@ -22,6 +22,17 @@ import {
   type AttentionDecisionRecord,
   type MemoryEventLedger,
 } from "./event-ledger";
+import {
+  activeRelationshipRepair,
+  decideRelationshipExpression,
+  eligibleRelationshipCallbacks,
+  formatRelationshipExpression,
+  relationshipMode,
+  type RelationshipExpressionDecision,
+  type RelationshipMode,
+  type RelationshipState,
+} from "./relationship-engine";
+import { loadRelationshipState } from "./relationship-service";
 
 export type AttentionCompileInput = CompileContextInput & {
   seenProspective?: string[];
@@ -38,11 +49,16 @@ export type AttentionCompileInput = CompileContextInput & {
 
 export type AttendedCompiledContext = CompiledContext & {
   attention: AttentionDecision;
+  relationship: {
+    state: RelationshipState;
+    expression: RelationshipExpressionDecision;
+  };
 };
 
 export type AttentionServiceDependencies = ContextCompilerDependencies & {
   getAnniversaries?: (space: CompileContextInput["space"], today: string) => Promise<Anniversary[]>;
   mode?: AttentionMode;
+  relationshipMode?: RelationshipMode;
   persistDecision?: boolean;
 };
 
@@ -113,6 +129,7 @@ function historyFrom(records: AttentionDecisionRecord[]): AttentionHistoryItem[]
           "obligation",
           "thread_follow_up",
           "anniversary",
+          "humor_callback",
           "truth_change",
           "uncertainty",
           "repair",
@@ -133,6 +150,15 @@ function evidenceForDecision(decision: AttentionDecision, ledger: MemoryEventLed
       const event = ledger.getEvent(eventId);
       return !!event && !event.tombstonedAt;
     })
+    .sort();
+}
+
+function relationshipEvidenceForDecision(decision: AttentionDecision, ledger: MemoryEventLedger) {
+  const relationshipEventIds = new Set(
+    decision.candidates.flatMap((candidate) => candidate.relationshipEventIds),
+  );
+  return [...relationshipEventIds]
+    .filter((eventId) => !!ledger.getRelationshipEvent(eventId))
     .sort();
 }
 
@@ -160,6 +186,7 @@ export function recordAttentionDecision(
     silenceReason: decision.silenceReason,
     decision: attentionAuditPayload(decision),
     evidenceEventIds: evidenceForDecision(decision, ledger),
+    relationshipEventIds: relationshipEvidenceForDecision(decision, ledger),
     createdAt: decision.decidedAt,
   });
 }
@@ -174,6 +201,12 @@ export async function compileMemoryContextWithAttention(
   const sessionId = cleanIdentifier(input.sessionId, `session-${randomUUID()}`);
   const momentKind = input.momentKind ?? "user_turn";
   const context = await compileMemoryContext({ ...input, at, userId }, { ...dependencies, ledger });
+  const relationshipState = loadRelationshipState({
+    ledger,
+    userId,
+    space: input.space,
+    at,
+  });
   const today = input.at ? at.slice(0, 10) : new Date().toLocaleDateString("en-CA");
   const anniversaries = input.includeAnniversaries === false
     ? []
@@ -201,21 +234,32 @@ export async function compileMemoryContextWithAttention(
       at,
       explicitSilence: input.explicitSilence,
       focusMode: input.focusMode,
-      repair: input.repair,
+      repair: input.repair ?? activeRelationshipRepair(relationshipState),
     },
     context,
     supplement: {
       anniversaries,
       changes: deriveAttentionChanges(ledger, userId, input.space),
+      callbacks: eligibleRelationshipCallbacks(relationshipState, at),
     },
     history,
   });
   if (dependencies.persistDecision !== false) {
     recordAttentionDecision(ledger, userId, input.space, decision);
   }
+  const expression = decideRelationshipExpression({
+    state: relationshipState,
+    attention: decision,
+    mode: dependencies.relationshipMode ?? relationshipMode(),
+  });
   return {
     ...context,
     attention: decision,
-    agentText: `${context.agentText}\n\n${formatAttentionDecision(decision)}`.slice(0, 20_000),
+    relationship: { state: relationshipState, expression },
+    agentText: [
+      context.agentText,
+      formatAttentionDecision(decision),
+      formatRelationshipExpression(expression),
+    ].join("\n\n").slice(0, 24_000),
   };
 }

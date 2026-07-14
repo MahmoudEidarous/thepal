@@ -44,10 +44,14 @@ Every agent tool is a *client tool*: it executes in your browser against local A
 The durable memory source of truth is now the local SQLite evidence ledger in
 `.recall/memory.sqlite`. Claims, temporal beliefs, life threads, prospective
 memory, dossiers, emotional arcs, routines, and week/month views are derived
-from that evidence. Supermemory Local remains the semantic index, relation
+from that evidence. A separate relationship ledger records Recall's own
+promises, mistakes, repairs, explicit delivery feedback, boundaries, and
+shared-humor lifecycle without turning any of them into facts about the user.
+Supermemory Local remains the semantic index, relation
 engine, and compatibility mirror; its summaries and metadata never outrank the
 canonical ledger. See [Phase 6 human continuity](docs/memory-continuity-phase-6.md)
-and [Phase 7 unified attention](docs/memory-attention-phase-7.md).
+[Phase 7 unified attention](docs/memory-attention-phase-7.md), and
+[Phase 8 relationship intelligence](docs/memory-relationship-phase-8.md).
 
 ## Run it
 
@@ -67,6 +71,11 @@ Open the app, tap the orb, allow the mic, and say something worth remembering. A
 may surface, while broader proactive candidates remain visible only in the
 privacy-safe audit trace. Use `shadow` to suppress every proactive class; do not
 use `active` until replay review clears the exit criteria in the Phase 7 doc.
+
+`RECALL_RELATIONSHIP_MODE=guarded` keeps the stable Recall persona active while
+applying only explicit user feedback. Repeated implicit delivery outcomes and
+shared callbacks remain shadow data until `active`; repair and boundaries are
+enforced in every mode.
 
 ## Stack
 

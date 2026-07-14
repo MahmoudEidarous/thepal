@@ -13,9 +13,12 @@ import type {
   MemorySource,
   MemorySpace,
   ProspectiveMemory,
+  RelationshipEvent,
+  RelationshipEventInput,
   Sensitivity,
   ThreadTransition,
 } from "./contracts";
+import type { RelationshipState } from "./relationship-engine";
 
 type SqliteModule = typeof import("node:sqlite");
 type SqliteDatabase = InstanceType<SqliteModule["DatabaseSync"]>;
@@ -38,7 +41,7 @@ function sqliteConstructor(): SqliteModule["DatabaseSync"] {
 }
 
 const CONTRACT_VERSION = 1 as const;
-const SCHEMA_VERSION = 5 as const;
+const SCHEMA_VERSION = 6 as const;
 const MAX_JOB_ATTEMPTS = 5;
 const PROCESSING_JOB_KIND = "enrich_and_index" as const;
 
@@ -112,6 +115,7 @@ export type DeletionPreview = {
   affectedThreads: string[];
   affectedProspective: string[];
   affectedAttention: number;
+  affectedRelationship: number;
   mirrored: boolean;
 };
 
@@ -132,11 +136,16 @@ export type AttentionDecisionRecord = {
   silenceReason: string | null;
   decision: Record<string, unknown>;
   evidenceEventIds: string[];
+  relationshipEventIds: string[];
   createdAt: string;
 };
 
-export type RecordAttentionDecisionInput = Omit<AttentionDecisionRecord, "evidenceEventIds"> & {
+export type RecordAttentionDecisionInput = Omit<
+  AttentionDecisionRecord,
+  "evidenceEventIds" | "relationshipEventIds"
+> & {
   evidenceEventIds?: string[];
+  relationshipEventIds?: string[];
 };
 
 export type TombstoneResult = {
@@ -177,6 +186,8 @@ export type LedgerStats = {
   threadTransitions: number;
   prospective: number;
   attentionDecisions: number;
+  relationshipEvents: number;
+  relationshipStates: number;
   mirrors: number;
 };
 
@@ -437,6 +448,59 @@ const MIGRATION_5 = `
     ON memory_attention_evidence(event_id, decision_id);
 `;
 
+const MIGRATION_6 = `
+  CREATE TABLE IF NOT EXISTS memory_relationship_events (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    session_id TEXT,
+    kind TEXT NOT NULL CHECK (kind IN (
+      'agent_promise','promise_outcome','recall_mistake','boundary','rupture',
+      'repair_attempt','repair_outcome','interaction_feedback','humor_episode','shared_reference'
+    )),
+    source TEXT NOT NULL CHECK (source IN ('user_explicit','recall_observed','system_outcome')),
+    sensitivity TEXT NOT NULL CHECK (sensitivity IN ('normal','sensitive','restricted')),
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+    persona_version TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    idempotency_key TEXT,
+    UNIQUE(user_id, space, idempotency_key)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_relationship_events_time
+    ON memory_relationship_events(user_id, space, occurred_at, id);
+  CREATE INDEX IF NOT EXISTS memory_relationship_events_kind
+    ON memory_relationship_events(user_id, space, kind, occurred_at DESC);
+
+  CREATE TABLE IF NOT EXISTS memory_relationship_evidence (
+    relationship_event_id TEXT NOT NULL REFERENCES memory_relationship_events(id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL REFERENCES memory_events(id),
+    PRIMARY KEY(relationship_event_id, event_id)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_relationship_evidence_event
+    ON memory_relationship_evidence(event_id, relationship_event_id);
+
+  CREATE TABLE IF NOT EXISTS memory_relationship_state (
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    projector_version TEXT NOT NULL,
+    persona_version TEXT NOT NULL,
+    state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+    projected_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, space)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS memory_attention_relationship_evidence (
+    decision_id TEXT NOT NULL REFERENCES memory_attention_decisions(id) ON DELETE CASCADE,
+    relationship_event_id TEXT NOT NULL REFERENCES memory_relationship_events(id),
+    PRIMARY KEY(decision_id, relationship_event_id)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_attention_relationship_event
+    ON memory_attention_relationship_evidence(relationship_event_id, decision_id);
+`;
+
 function text(row: SqlRow, key: string): string {
   const value = row[key];
   if (typeof value !== "string") throw new Error(`memory ledger: ${key} is not text`);
@@ -635,6 +699,22 @@ function prospectiveFromRow(row: SqlRow): ProspectiveMemory {
   };
 }
 
+function relationshipEventFromRow(row: SqlRow): RelationshipEvent {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    space: text(row, "space") as MemorySpace,
+    sessionId: nullableText(row, "session_id"),
+    kind: text(row, "kind") as RelationshipEvent["kind"],
+    source: text(row, "source") as RelationshipEvent["source"],
+    sensitivity: text(row, "sensitivity") as Sensitivity,
+    payload: JSON.parse(text(row, "payload_json")) as RelationshipEvent["payload"],
+    evidenceEventIds: JSON.parse(text(row, "evidence_event_ids_json")) as string[],
+    occurredAt: text(row, "occurred_at"),
+    personaVersion: text(row, "persona_version"),
+  };
+}
+
 function mirrorFromRow(row: SqlRow): MemoryMirror {
   return {
     eventId: text(row, "event_id"),
@@ -761,6 +841,23 @@ export class MemoryEventLedger {
           )
           .run(5, "auditable unified-attention decisions", now);
         this.database.exec("PRAGMA user_version = 5");
+        this.database.exec("COMMIT");
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    }
+    if (current < 6) {
+      const now = new Date().toISOString();
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(MIGRATION_6);
+        this.database
+          .prepare(
+            "INSERT OR IGNORE INTO memory_schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+          )
+          .run(6, "relationship memory, repair, dialect, and humor lifecycle", now);
+        this.database.exec("PRAGMA user_version = 6");
         this.database.exec("COMMIT");
       } catch (error) {
         this.database.exec("ROLLBACK");
@@ -1679,8 +1776,177 @@ export class MemoryEventLedger {
     return rows.map(prospectiveFromRow);
   }
 
+  appendRelationshipEvent(
+    input: RelationshipEventInput,
+    personaVersion: string,
+    id = randomUUID(),
+  ): RelationshipEvent {
+    if (input.idempotencyKey) {
+      const existing = this.database
+        .prepare(
+          "SELECT id FROM memory_relationship_events WHERE user_id = ? AND space = ? AND idempotency_key = ?",
+        )
+        .get(input.userId, input.space, input.idempotencyKey) as SqlRow | undefined;
+      if (existing) {
+        const found = this.getRelationshipEvent(text(existing, "id"));
+        if (!found) throw new Error("memory ledger: idempotent relationship event vanished");
+        return found;
+      }
+    }
+    const evidenceEventIds = [...new Set(input.evidenceEventIds)].sort();
+    for (const eventId of evidenceEventIds) {
+      const event = this.getEvent(eventId);
+      if (!event || event.tombstonedAt) {
+        throw new Error(`memory ledger: relationship evidence ${eventId} is unavailable`);
+      }
+      if (event.userId !== input.userId || event.space !== input.space) {
+        throw new Error("memory ledger: relationship evidence crossed a user or memory space");
+      }
+    }
+    const occurredAt = input.occurredAt ?? new Date().toISOString();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database
+        .prepare(`
+          INSERT INTO memory_relationship_events(
+            id, user_id, space, session_id, kind, source, sensitivity,
+            payload_json, persona_version, occurred_at, idempotency_key
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          id,
+          input.userId,
+          input.space,
+          input.sessionId,
+          input.kind,
+          input.source,
+          input.sensitivity,
+          JSON.stringify(input.payload),
+          personaVersion,
+          occurredAt,
+          input.idempotencyKey ?? null,
+        );
+      const link = this.database.prepare(
+        "INSERT INTO memory_relationship_evidence(relationship_event_id, event_id) VALUES (?, ?)",
+      );
+      for (const eventId of evidenceEventIds) link.run(id, eventId);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    const appended = this.getRelationshipEvent(id);
+    if (!appended) throw new Error("memory ledger: appended relationship event vanished");
+    return appended;
+  }
+
+  getRelationshipEvent(id: string): RelationshipEvent | null {
+    const row = this.database
+      .prepare(`
+        SELECT r.*,
+          COALESCE((
+            SELECT json_group_array(e.event_id)
+            FROM memory_relationship_evidence e
+            WHERE e.relationship_event_id = r.id
+          ), '[]') AS evidence_event_ids_json
+        FROM memory_relationship_events r
+        WHERE r.id = ?
+      `)
+      .get(id) as SqlRow | undefined;
+    return row ? relationshipEventFromRow(row) : null;
+  }
+
+  listRelationshipEvents(options: {
+    userId?: string;
+    space: MemorySpace;
+    kind?: RelationshipEvent["kind"];
+    limit?: number;
+  }): RelationshipEvent[] {
+    const conditions = ["r.user_id = ?", "r.space = ?"];
+    const values: Array<string | number> = [options.userId ?? "local-user", options.space];
+    if (options.kind) {
+      conditions.push("r.kind = ?");
+      values.push(options.kind);
+    }
+    const limit = Math.max(1, Math.min(10_000, Math.floor(options.limit ?? 2_000)));
+    values.push(limit);
+    const rows = this.database
+      .prepare(`
+        SELECT r.*,
+          COALESCE((
+            SELECT json_group_array(e.event_id)
+            FROM memory_relationship_evidence e
+            WHERE e.relationship_event_id = r.id
+          ), '[]') AS evidence_event_ids_json
+        FROM memory_relationship_events r
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY r.occurred_at, r.id
+        LIMIT ?
+      `)
+      .all(...values) as SqlRow[];
+    return rows.map(relationshipEventFromRow);
+  }
+
+  replaceRelationshipState(state: RelationshipState) {
+    this.database
+      .prepare(`
+        INSERT INTO memory_relationship_state(
+          user_id, space, projector_version, persona_version, state_json, projected_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, space) DO UPDATE SET
+          projector_version = excluded.projector_version,
+          persona_version = excluded.persona_version,
+          state_json = excluded.state_json,
+          projected_at = excluded.projected_at
+      `)
+      .run(
+        state.userId,
+        state.space,
+        state.projectorVersion,
+        state.personaVersion,
+        JSON.stringify(state),
+        state.projectedAt,
+      );
+  }
+
+  getRelationshipState(userId: string, space: MemorySpace): RelationshipState | null {
+    const row = this.database
+      .prepare("SELECT state_json FROM memory_relationship_state WHERE user_id = ? AND space = ?")
+      .get(userId, space) as SqlRow | undefined;
+    return row ? (JSON.parse(text(row, "state_json")) as RelationshipState) : null;
+  }
+
+  deleteRelationshipEvent(id: string, userId = "local-user", space?: MemorySpace) {
+    const event = this.getRelationshipEvent(id);
+    if (!event || event.userId !== userId || (space && event.space !== space)) {
+      throw new Error(`memory ledger: relationship event ${id} is unavailable`);
+    }
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database
+        .prepare(`
+          DELETE FROM memory_attention_decisions
+          WHERE id IN (
+            SELECT decision_id FROM memory_attention_relationship_evidence
+            WHERE relationship_event_id = ?
+          )
+        `)
+        .run(id);
+      this.database.prepare("DELETE FROM memory_relationship_events WHERE id = ?").run(id);
+      this.database
+        .prepare("DELETE FROM memory_relationship_state WHERE user_id = ? AND space = ?")
+        .run(event.userId, event.space);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return event;
+  }
+
   recordAttentionDecision(input: RecordAttentionDecisionInput): AttentionDecisionRecord {
     const evidenceEventIds = [...new Set(input.evidenceEventIds ?? [])].sort();
+    const relationshipEventIds = [...new Set(input.relationshipEventIds ?? [])].sort();
     for (const eventId of evidenceEventIds) {
       const event = this.getEvent(eventId);
       if (!event || event.tombstonedAt) {
@@ -1688,6 +1954,15 @@ export class MemoryEventLedger {
       }
       if (event.userId !== input.userId || event.space !== input.space) {
         throw new Error("memory ledger: attention evidence crossed a user or memory space");
+      }
+    }
+    for (const relationshipEventId of relationshipEventIds) {
+      const event = this.getRelationshipEvent(relationshipEventId);
+      if (!event) {
+        throw new Error(`memory ledger: attention relationship evidence ${relationshipEventId} is unavailable`);
+      }
+      if (event.userId !== input.userId || event.space !== input.space) {
+        throw new Error("memory ledger: attention relationship evidence crossed a user or memory space");
       }
     }
     this.database.exec("BEGIN IMMEDIATE");
@@ -1722,12 +1997,18 @@ export class MemoryEventLedger {
         "INSERT INTO memory_attention_evidence(decision_id, event_id) VALUES (?, ?)",
       );
       for (const eventId of evidenceEventIds) link.run(input.id, eventId);
+      const relationshipLink = this.database.prepare(
+        "INSERT INTO memory_attention_relationship_evidence(decision_id, relationship_event_id) VALUES (?, ?)",
+      );
+      for (const relationshipEventId of relationshipEventIds) {
+        relationshipLink.run(input.id, relationshipEventId);
+      }
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
       throw error;
     }
-    return { ...input, evidenceEventIds };
+    return { ...input, evidenceEventIds, relationshipEventIds };
   }
 
   listAttentionDecisions(options: {
@@ -1755,7 +2036,12 @@ export class MemoryEventLedger {
       .prepare(`
         SELECT d.*,
           COALESCE(json_group_array(e.event_id) FILTER (WHERE e.event_id IS NOT NULL), '[]')
-            AS evidence_event_ids_json
+            AS evidence_event_ids_json,
+          COALESCE((
+            SELECT json_group_array(re.relationship_event_id)
+            FROM memory_attention_relationship_evidence re
+            WHERE re.decision_id = d.id
+          ), '[]') AS relationship_event_ids_json
         FROM memory_attention_decisions d
         LEFT JOIN memory_attention_evidence e ON e.decision_id = d.id
         WHERE ${conditions.join(" AND ")}
@@ -1784,6 +2070,7 @@ export class MemoryEventLedger {
         silenceReason: nullableText(row, "silence_reason"),
         decision: JSON.parse(text(row, "decision_json")) as Record<string, unknown>,
         evidenceEventIds: JSON.parse(text(row, "evidence_event_ids_json")) as string[],
+        relationshipEventIds: JSON.parse(text(row, "relationship_event_ids_json")) as string[],
         createdAt: text(row, "created_at"),
       };
     });
@@ -1792,9 +2079,19 @@ export class MemoryEventLedger {
   attentionDecisionCountForEvent(eventId: string): number {
     const row = this.database
       .prepare(
-        "SELECT COUNT(DISTINCT decision_id) AS count FROM memory_attention_evidence WHERE event_id = ?",
+        `
+          SELECT COUNT(DISTINCT decision_id) AS count FROM (
+            SELECT decision_id FROM memory_attention_evidence WHERE event_id = ?
+            UNION
+            SELECT are.decision_id
+            FROM memory_attention_relationship_evidence are
+            JOIN memory_relationship_evidence re
+              ON re.relationship_event_id = are.relationship_event_id
+            WHERE re.event_id = ?
+          )
+        `,
       )
-      .get(eventId) as SqlRow;
+      .get(eventId, eventId) as SqlRow;
     return integer(row, "count");
   }
 
@@ -1852,6 +2149,12 @@ export class MemoryEventLedger {
       .filter((trigger) => trigger.evidenceEventIds.includes(eventId))
       .map((trigger) => trigger.id);
     const affectedAttention = this.attentionDecisionCountForEvent(eventId);
+    const affectedRelationshipRow = this.database
+      .prepare(
+        "SELECT COUNT(DISTINCT relationship_event_id) AS count FROM memory_relationship_evidence WHERE event_id = ?",
+      )
+      .get(eventId) as SqlRow;
+    const affectedRelationship = integer(affectedRelationshipRow, "count");
     const token = randomUUID();
     const issuedAt = options.now ?? new Date().toISOString();
     const expiresAt = new Date(
@@ -1872,6 +2175,7 @@ export class MemoryEventLedger {
       affectedThreads,
       affectedProspective,
       affectedAttention,
+      affectedRelationship,
       mirrored: this.getMirror(eventId)?.status === "synced",
     };
   }
@@ -1933,9 +2237,26 @@ export class MemoryEventLedger {
           DELETE FROM memory_attention_decisions
           WHERE id IN (
             SELECT decision_id FROM memory_attention_evidence WHERE event_id = ?
+            UNION
+            SELECT are.decision_id
+            FROM memory_attention_relationship_evidence are
+            JOIN memory_relationship_evidence re
+              ON re.relationship_event_id = are.relationship_event_id
+            WHERE re.event_id = ?
+          )
+        `)
+        .run(eventId, eventId);
+      this.database
+        .prepare(`
+          DELETE FROM memory_relationship_events
+          WHERE id IN (
+            SELECT relationship_event_id FROM memory_relationship_evidence WHERE event_id = ?
           )
         `)
         .run(eventId);
+      this.database
+        .prepare("DELETE FROM memory_relationship_state WHERE user_id = ? AND space = ?")
+        .run(event.userId, event.space);
       this.database
         .prepare(`
           UPDATE memory_jobs
@@ -2025,6 +2346,8 @@ export class MemoryEventLedger {
       threadTransitions: count("memory_thread_transitions"),
       prospective: count("memory_prospective_triggers"),
       attentionDecisions: count("memory_attention_decisions"),
+      relationshipEvents: count("memory_relationship_events"),
+      relationshipStates: count("memory_relationship_state"),
       mirrors: count("memory_mirrors"),
     };
   }

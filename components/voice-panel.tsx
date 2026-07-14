@@ -6,6 +6,7 @@ import { VoiceOrb, type OrbState } from "./voice-orb";
 import { DEMO_CARDS, SenseDock, type MoodData, type SenseCard, type WebSource } from "./sense-cards";
 import { DEMO_STORY, StoryOverlay, type StoryBeat, type StoryState } from "./story-mode";
 import { fetchWeather, geocode, locate, weatherOneLiner, type Place } from "@/lib/senses";
+import { hasLatestUserTranscriptEvidence } from "@/lib/memory/relationship-source-policy";
 
 type Line = { role: "user" | "agent"; text: string };
 type Activity = { id: number; label: string };
@@ -459,7 +460,7 @@ function VoiceCore({
           includeProspective: true,
           includeObligations: true,
           includeAnniversaries: true,
-        }).catch(() => ({ attention: null, attentionText: "" })),
+        }).catch(() => ({ attention: null, attentionText: "", relationshipText: "" })),
         fetch("/api/prospective")
           .then((r) => (r.ok ? r.json() : { triggers: [] }))
           .catch(() => ({ triggers: [] })),
@@ -510,7 +511,11 @@ function VoiceCore({
       const annivText = attentionSurface?.kind === "anniversary" ? `- ${attentionSurface.text}` : "none";
       const attentionText =
         typeof attentionData.attentionText === "string"
-          ? attentionData.attentionText
+          ? `${attentionData.attentionText}\n\n${
+              typeof attentionData.relationshipText === "string"
+                ? attentionData.relationshipText
+                : ""
+            }`.trim()
           : "No proactive memory aside is authorized at session start.";
 
       type Prospective = { id: string; topic: string; action: string; snoozedUntil?: string | null };
@@ -556,6 +561,9 @@ function VoiceCore({
               item.content.includes(attentionSurface.text),
           )
         : undefined;
+      const requiredRepair = (
+        (attentionData.attention?.required ?? []) as Array<{ kind?: string; text?: string }>
+      ).find((candidate) => candidate.kind === "repair" && candidate.text);
       const namePart = greetingName ? `, ${greetingName}` : "";
       const hour = new Date().getHours();
       const hi = hour < 5 ? `Still up${namePart}?` : `Hey${namePart}.`;
@@ -583,9 +591,11 @@ function VoiceCore({
           }`
         : null;
       const opening =
-        memoryCount === 0
-          ? `${hi} We haven't met — I'm Recall. Whatever you tell me, I keep. So: who are you?`
-          : urgentLine
+        requiredRepair?.text
+          ? `${hi} Before anything else: ${requiredRepair.text}. That was on me. I'm sorry. Let me correct it before we move on.`
+          : memoryCount === 0
+            ? `${hi} We haven't met — I'm Recall. Whatever you tell me, I keep. So: who are you?`
+            : urgentLine
               ? `${hi} Before I forget — ${urgentLine}. Talk to me.`
               : attentionSurface?.kind === "anniversary"
                 ? `${hi} ${attentionSurface.text}. That came back to me today.`
@@ -612,6 +622,137 @@ function VoiceCore({
           opening,
         },
         clientTools: {
+          record_relationship_event: ({
+            kind,
+            summary,
+            user_evidence,
+            target_id,
+            action,
+            due_at,
+            scope,
+            rule,
+            dimension,
+            direction,
+            reference,
+            theme,
+            artifact_id,
+            policy_patch,
+            severity,
+            rupture_kind,
+          }: {
+            kind: string;
+            summary: string;
+            user_evidence?: string;
+            target_id?: string;
+            action?: string;
+            due_at?: string;
+            scope?: string;
+            rule?: string;
+            dimension?: string;
+            direction?: number | string;
+            reference?: string;
+            theme?: string;
+            artifact_id?: string;
+            policy_patch?: string;
+            severity?: string;
+            rupture_kind?: string;
+          }) =>
+            track("learning our rhythm", async () => {
+              const latestUser = [...linesRef.current]
+                .reverse()
+                .find((line) => line.role === "user")?.text ?? "";
+              if (!hasLatestUserTranscriptEvidence(kind, user_evidence, latestUser)) {
+                return "Relationship event NOT recorded: explicit user authority requires a short exact phrase from the user's latest turn. Do not claim it was saved; ask only if the distinction matters.";
+              }
+              const eventKind =
+                kind === "agent_promise"
+                  ? "agent_promise"
+                  : kind.startsWith("promise_")
+                    ? "promise_outcome"
+                    : kind === "boundary"
+                      ? "boundary"
+                      : kind === "recall_mistake"
+                        ? "recall_mistake"
+                        : kind === "repair_attempt"
+                          ? "repair_attempt"
+                          : kind.startsWith("repair_")
+                            ? "repair_outcome"
+                            : kind === "feedback"
+                              ? "interaction_feedback"
+                              : kind === "humor_user_reuse"
+                                ? "shared_reference"
+                                : "humor_episode";
+              const source =
+                kind === "boundary" ||
+                kind === "feedback" ||
+                kind === "humor_user_reuse" ||
+                kind === "repair_accepted" ||
+                kind === "repair_failed"
+                  ? "user_explicit"
+                  : kind.startsWith("promise_") || kind === "humor_callback"
+                    ? "system_outcome"
+                    : "recall_observed";
+              const payload = {
+                summary,
+                targetId: target_id ?? null,
+                action: action ?? null,
+                dueAt: due_at ?? null,
+                promiseOutcome:
+                  kind === "promise_kept"
+                    ? "kept"
+                    : kind === "promise_broken"
+                      ? "broken"
+                      : kind === "promise_cancelled"
+                        ? "cancelled"
+                        : null,
+                repairOutcome:
+                  kind === "repair_accepted"
+                    ? "accepted"
+                    : kind === "repair_failed"
+                      ? "failed"
+                      : null,
+                severity: severity ?? null,
+                ruptureKind: rupture_kind ?? null,
+                dimension: dimension ?? null,
+                direction:
+                  direction === -1 || direction === "less"
+                    ? -1
+                    : direction === 1 || direction === "more"
+                      ? 1
+                      : null,
+                explicit: source === "user_explicit",
+                scope: scope ?? null,
+                rule: rule ?? null,
+                boundaryStatus: kind === "boundary" ? "active" : null,
+                artifactId: artifact_id ?? null,
+                reference: reference ?? null,
+                theme: theme ?? null,
+                humorRole:
+                  kind === "humor_seed"
+                    ? "seed"
+                    : kind === "humor_callback"
+                      ? "recall_callback"
+                      : kind === "humor_user_reuse"
+                        ? "user_reuse"
+                        : null,
+                policyPatch: policy_patch ?? null,
+                outcome:
+                  kind === "humor_user_reuse"
+                    ? "positive"
+                    : kind === "humor_callback"
+                      ? "neutral"
+                      : null,
+              };
+              const data = await postJson("/api/relationship", {
+                sessionId: sessionIdRef.current,
+                kind: eventKind,
+                source,
+                sensitivity: "normal",
+                payload,
+              });
+              const ruptureStatus = data.state?.rupture?.status ?? "none";
+              return `Relationship event recorded as ${data.event.id}. Rupture status: ${ruptureStatus}. Do not announce the logging. If this is a mistake or rupture, repair it now: name the specific failure, own it, correct it, and skip humor.`;
+            }),
           search_memories: ({ query }: { query: string }) =>
             track("searching memories", async () => {
               const data = await postJson("/api/context/compile", {

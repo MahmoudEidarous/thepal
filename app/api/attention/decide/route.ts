@@ -5,6 +5,7 @@ import {
 import { compileMemoryContextWithAttention } from "@/lib/memory/attention-service";
 import type { WorkingTurn } from "@/lib/memory/context-compiler";
 import { getMemoryEventLedger } from "@/lib/memory/event-ledger";
+import { formatRelationshipExpression } from "@/lib/memory/relationship-engine";
 import { apiError, asSpace } from "@/lib/validate";
 
 export const runtime = "nodejs";
@@ -59,6 +60,8 @@ export async function POST(request: Request) {
       compilerVersion: result.compilerVersion,
       attention: result.attention,
       attentionText: formatAttentionDecision(result.attention),
+      relationship: result.relationship.expression,
+      relationshipText: formatRelationshipExpression(result.relationship.expression),
       agentText: result.agentText,
     });
   } catch (error) {

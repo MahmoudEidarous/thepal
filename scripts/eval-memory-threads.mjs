@@ -84,7 +84,7 @@ function thread(title) {
 }
 
 try {
-  check(ledger.stats().schemaVersion === 5, "schema migration 5 is active");
+  check(ledger.stats().schemaVersion === 6, "schema migration 6 is active");
   const upgradePath = join(directory, "upgrade-from-v2.sqlite");
   const seededUpgrade = new MemoryEventLedger({ databasePath: upgradePath });
   seededUpgrade.close();
@@ -98,8 +98,8 @@ try {
   `);
   rawUpgrade.close();
   const upgraded = new MemoryEventLedger({ databasePath: upgradePath });
-  check(upgraded.stats().schemaVersion === 5, "an existing schema-v2 ledger upgrades in place");
-  check(upgraded.stats().integrity === "ok", "the v2-to-v5 migration preserves SQLite integrity");
+  check(upgraded.stats().schemaVersion === 6, "an existing schema-v2 ledger upgrades in place");
+  check(upgraded.stats().integrity === "ok", "the v2-to-v6 migration preserves SQLite integrity");
   upgraded.close();
 
   const viennaOld = append("The Vienna call is on July 27th.", {

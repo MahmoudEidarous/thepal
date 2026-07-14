@@ -104,7 +104,7 @@ function decide({ mode = "guarded", ctx = context(), now = moment(), supplement 
 
 let ledger = new MemoryEventLedger({ databasePath });
 try {
-  check(ledger.stats().schemaVersion === 5, "schema migration 5 installs the attention audit store");
+  check(ledger.stats().schemaVersion === 6, "schema migration 6 preserves the attention audit store");
   check(attentionMode(undefined) === "guarded", "attention defaults to the narrow guarded rollout");
   check(attentionMode("shadow") === "shadow", "shadow rollout is selectable");
   check(attentionMode("active") === "active", "active rollout is selectable");

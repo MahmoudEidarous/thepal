@@ -16,6 +16,7 @@ export type AttentionCandidateKind =
   | "obligation"
   | "thread_follow_up"
   | "anniversary"
+  | "humor_callback"
   | "truth_change"
   | "uncertainty"
   | "repair";
@@ -25,6 +26,7 @@ export type AttentionAction =
   | "mention_obligation"
   | "ask_thread_follow_up"
   | "offer_returning_past"
+  | "use_shared_callback"
   | "apply_current_truth"
   | "ask_for_clarification"
   | "repair_relationship";
@@ -41,6 +43,8 @@ export type AttentionGateName =
 export type AttentionRepair = {
   reason: string;
   instruction: string;
+  evidenceEventIds?: string[];
+  relationshipEventIds?: string[];
 };
 
 export type AttentionMoment = {
@@ -74,6 +78,16 @@ export type AttentionSupplement = {
     evidenceEventIds?: string[];
   }>;
   changes?: AttentionChange[];
+  callbacks?: Array<{
+    id: string;
+    reference: string;
+    theme: string;
+    confidence: "direct";
+    sensitivity: Sensitivity;
+    evidenceEventIds: string[];
+    relationshipEventIds: string[];
+    lastUsedAt: string | null;
+  }>;
 };
 
 export type AttentionHistoryItem = {
@@ -129,6 +143,7 @@ export type AttentionCandidate = {
   sensitivity: Sensitivity;
   confidence: ContextItem["confidence"];
   evidenceEventIds: string[];
+  relationshipEventIds: string[];
   factors: AttentionFactors;
   gates: AttentionGate[];
   eligible: boolean;
@@ -235,10 +250,16 @@ function factorScore(factors: AttentionFactors) {
   );
 }
 
-function draft(input: Omit<CandidateDraft, "cooldownKey"> & { cooldownSeed: string }): CandidateDraft {
+function draft(
+  input: Omit<CandidateDraft, "cooldownKey" | "relationshipEventIds"> & {
+    cooldownSeed: string;
+    relationshipEventIds?: string[];
+  },
+): CandidateDraft {
   const { cooldownSeed, ...candidate } = input;
   return {
     ...candidate,
+    relationshipEventIds: candidate.relationshipEventIds ?? [],
     cooldownKey: hash(`${candidate.kind}|${cooldownSeed}`).slice(0, 32),
   };
 }
@@ -253,6 +274,7 @@ function cooldownHours(kind: AttentionCandidateKind) {
     obligation: 20,
     thread_follow_up: 72,
     anniversary: 20,
+    humor_callback: 336,
     truth_change: 1,
     uncertainty: 1,
     repair: 0,
@@ -318,6 +340,9 @@ function interruptionAllowed(
   if (candidate.kind === "prospective" && PROSPECTIVE_MANAGEMENT.test(moment.query)) return false;
   if (signals.taskFocused && !signals.explicitInvitation && candidate.relevance < 0.5) return false;
   if (candidate.kind === "anniversary") {
+    return signals.lull || signals.explicitInvitation || candidate.relevance >= 0.5;
+  }
+  if (candidate.kind === "humor_callback") {
     return signals.lull || signals.explicitInvitation || candidate.relevance >= 0.5;
   }
   return true;
@@ -592,6 +617,54 @@ function anniversaries(
   });
 }
 
+function humorCallbacks(
+  supplement: AttentionSupplement,
+  moment: AttentionMoment,
+  signals: AttentionMomentSignals,
+) {
+  return (supplement.callbacks ?? [])
+    .map((item): CandidateDraft | null => {
+      const rel = relevance(moment.query, `${item.theme} ${item.reference}`);
+      if (!moment.query.trim() || rel === 0) return null;
+      const factors: AttentionFactors = {
+        helpfulness: 5,
+        urgency: 0,
+        actionability: 2,
+        relationalValue: 45,
+        repairValue: 0,
+        interruptionCost: rel >= 0.5 ? 4 : signals.lull ? 10 : 22,
+        repetitionCost: 0,
+        uncertaintyCost: 0,
+        sensitivityRisk: item.sensitivity === "normal" ? 0 : 40,
+        userLoad: userLoad(signals),
+      };
+      return draft({
+        id: `humor-callback:${item.id}`,
+        sourceItemId: item.id,
+        kind: "humor_callback",
+        class: "proactive",
+        action: "use_shared_callback",
+        text: `${item.theme}: ${item.reference}`,
+        instruction: `Only if a fresh connection is obvious, call record_relationship_event with kind=humor_callback, artifact_id=${item.id}, reference="${clean(item.reference, 220)}", theme="${clean(item.theme, 160)}", and a factual summary; then use the shared reference at most once. Never repeat the original successful wording verbatim. If the connection is weak, use no joke and do not record a callback.`,
+        whyNow: "the current turn naturally touches a shared reference the user previously reused",
+        cooldownSeed: item.id,
+        threshold: 44,
+        relevance: rel,
+        sensitivity: item.sensitivity,
+        confidence: item.confidence,
+        evidenceEventIds: item.evidenceEventIds,
+        relationshipEventIds: item.relationshipEventIds,
+        factors,
+        metadata: {
+          artifactId: item.id,
+          theme: item.theme,
+          lastUsedAt: item.lastUsedAt,
+        },
+      });
+    })
+    .filter((item): item is CandidateDraft => !!item);
+}
+
 function truthChanges(supplement: AttentionSupplement, moment: AttentionMoment, signals: AttentionMomentSignals) {
   return (supplement.changes ?? [])
     .map((item): CandidateDraft | null => {
@@ -699,7 +772,8 @@ function repair(moment: AttentionMoment): CandidateDraft[] {
       relevance: 1,
       sensitivity: "normal",
       confidence: "direct",
-      evidenceEventIds: [],
+      evidenceEventIds: moment.repair.evidenceEventIds ?? [],
+      relationshipEventIds: moment.repair.relationshipEventIds ?? [],
       factors,
       metadata: {},
     }),
@@ -740,6 +814,7 @@ export function decideAttention(
     ...prospectives(input.context, input.moment, signals),
     ...obligations(input.context, input.moment, signals),
     ...threads(input.context, input.moment, signals),
+    ...humorCallbacks(supplement, input.moment, signals),
     ...anniversaries(supplement, input.moment, signals),
   ];
   const candidates = drafts
@@ -841,6 +916,7 @@ export function attentionAuditPayload(decision: AttentionDecision) {
           score: candidate.score,
           relevance: candidate.relevance,
           evidenceEventIds: candidate.evidenceEventIds,
+          relationshipEventIds: candidate.relationshipEventIds,
           factors: candidate.factors,
           gates: candidate.gates,
           eligible: candidate.eligible,

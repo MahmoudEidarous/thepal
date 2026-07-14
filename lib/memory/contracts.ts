@@ -89,6 +89,46 @@ export const PROSPECTIVE_OPERATIONS = [
 ] as const;
 export const PROSPECTIVE_STATUSES = ["open", "done", "cancelled"] as const;
 export const PROSPECTIVE_OUTCOMES = ["fired", "resolved", "cancelled"] as const;
+export const RELATIONSHIP_EVENT_KINDS = [
+  "agent_promise",
+  "promise_outcome",
+  "recall_mistake",
+  "boundary",
+  "rupture",
+  "repair_attempt",
+  "repair_outcome",
+  "interaction_feedback",
+  "humor_episode",
+  "shared_reference",
+] as const;
+export const RELATIONSHIP_EVENT_SOURCES = [
+  "user_explicit",
+  "recall_observed",
+  "system_outcome",
+] as const;
+export const RELATIONSHIP_OUTCOMES = ["positive", "neutral", "negative"] as const;
+export const RELATIONSHIP_SEVERITIES = ["low", "medium", "high", "critical"] as const;
+export const RUPTURE_KINDS = [
+  "memory_error",
+  "misunderstanding",
+  "competence_failure",
+  "broken_promise",
+  "boundary_violation",
+  "privacy_violation",
+  "integrity_failure",
+  "personality_drift",
+  "relational_neglect",
+] as const;
+export const DIALECT_DIMENSIONS = [
+  "directness",
+  "verbosity",
+  "warmth",
+  "teasing",
+  "initiative",
+] as const;
+export const HUMOR_ROLES = ["seed", "user_reuse", "recall_callback"] as const;
+export const PROMISE_OUTCOMES = ["kept", "broken", "cancelled"] as const;
+export const REPAIR_OUTCOMES = ["accepted", "resolved", "rejected", "failed"] as const;
 
 const InstantSchema = z.string().refine((value) => Number.isFinite(Date.parse(value)), {
   message: "expected an ISO-compatible instant",
@@ -113,6 +153,15 @@ export const ThreadCommitmentStatusSchema = z.enum(THREAD_COMMITMENT_STATUSES);
 export const ProspectiveOperationSchema = z.enum(PROSPECTIVE_OPERATIONS);
 export const ProspectiveStatusSchema = z.enum(PROSPECTIVE_STATUSES);
 export const ProspectiveOutcomeSchema = z.enum(PROSPECTIVE_OUTCOMES);
+export const RelationshipEventKindSchema = z.enum(RELATIONSHIP_EVENT_KINDS);
+export const RelationshipEventSourceSchema = z.enum(RELATIONSHIP_EVENT_SOURCES);
+export const RelationshipOutcomeSchema = z.enum(RELATIONSHIP_OUTCOMES);
+export const RelationshipSeveritySchema = z.enum(RELATIONSHIP_SEVERITIES);
+export const RuptureKindSchema = z.enum(RUPTURE_KINDS);
+export const DialectDimensionSchema = z.enum(DIALECT_DIMENSIONS);
+export const HumorRoleSchema = z.enum(HUMOR_ROLES);
+export const PromiseOutcomeSchema = z.enum(PROMISE_OUTCOMES);
+export const RepairOutcomeSchema = z.enum(REPAIR_OUTCOMES);
 
 export const TimeRangeSchema = z
   .object({
@@ -201,6 +250,55 @@ export const ProspectiveMemorySchema = z.object({
   providerExternalId: z.string().min(1).max(500).nullable(),
   evidenceEventIds: z.array(z.string().uuid()).min(1).max(1_000),
   projectorVersion: z.string().min(1).max(120),
+});
+
+// Relationship memory is deliberately not a user-fact schema. It records
+// what happened between Recall and the user: promises Recall made, explicit
+// feedback, boundaries, mistakes, repair, and the lifecycle of shared jokes.
+// External/document content is not a valid source for this ledger.
+export const RelationshipEventPayloadSchema = z.object({
+  summary: z.string().trim().min(1).max(2_000),
+  targetId: z.string().uuid().nullable().default(null),
+  action: z.string().trim().min(1).max(1_000).nullable().default(null),
+  dueAt: InstantSchema.nullable().default(null),
+  outcome: RelationshipOutcomeSchema.nullable().default(null),
+  promiseOutcome: PromiseOutcomeSchema.nullable().default(null),
+  repairOutcome: RepairOutcomeSchema.nullable().default(null),
+  severity: RelationshipSeveritySchema.nullable().default(null),
+  ruptureKind: RuptureKindSchema.nullable().default(null),
+  dimension: DialectDimensionSchema.nullable().default(null),
+  direction: z.union([z.literal(-1), z.literal(1)]).nullable().default(null),
+  explicit: z.boolean().default(false),
+  scope: z.string().trim().min(1).max(500).nullable().default(null),
+  rule: z.string().trim().min(1).max(1_000).nullable().default(null),
+  boundaryStatus: z.enum(["active", "revoked"]).nullable().default(null),
+  artifactId: z.string().uuid().nullable().default(null),
+  reference: z.string().trim().min(1).max(500).nullable().default(null),
+  theme: z.string().trim().min(1).max(300).nullable().default(null),
+  humorRole: HumorRoleSchema.nullable().default(null),
+  policyPatch: z.string().trim().min(1).max(1_000).nullable().default(null),
+});
+
+export const RelationshipEventInputSchema = z.object({
+  userId: z.string().trim().min(1).max(120).default("local-user"),
+  space: MemorySpaceSchema.default("personal"),
+  sessionId: z.string().trim().min(1).max(160).nullable().default(null),
+  kind: RelationshipEventKindSchema,
+  source: RelationshipEventSourceSchema,
+  sensitivity: SensitivitySchema.default("normal"),
+  payload: RelationshipEventPayloadSchema,
+  evidenceEventIds: z.array(z.string().uuid()).max(100).default([]),
+  occurredAt: InstantSchema.optional(),
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
+});
+
+export const RelationshipEventSchema = RelationshipEventInputSchema.omit({
+  idempotencyKey: true,
+  occurredAt: true,
+}).extend({
+  id: z.string().uuid(),
+  occurredAt: InstantSchema,
+  personaVersion: z.string().min(1).max(120),
 });
 
 export const MemorySourceSchema = z.object({
@@ -353,6 +451,15 @@ export type ThreadCommitmentStatus = z.infer<typeof ThreadCommitmentStatusSchema
 export type ProspectiveOperation = z.infer<typeof ProspectiveOperationSchema>;
 export type ProspectiveStatus = z.infer<typeof ProspectiveStatusSchema>;
 export type ProspectiveOutcome = z.infer<typeof ProspectiveOutcomeSchema>;
+export type RelationshipEventKind = z.infer<typeof RelationshipEventKindSchema>;
+export type RelationshipEventSource = z.infer<typeof RelationshipEventSourceSchema>;
+export type RelationshipOutcome = z.infer<typeof RelationshipOutcomeSchema>;
+export type RelationshipSeverity = z.infer<typeof RelationshipSeveritySchema>;
+export type RuptureKind = z.infer<typeof RuptureKindSchema>;
+export type DialectDimension = z.infer<typeof DialectDimensionSchema>;
+export type HumorRole = z.infer<typeof HumorRoleSchema>;
+export type PromiseOutcome = z.infer<typeof PromiseOutcomeSchema>;
+export type RepairOutcome = z.infer<typeof RepairOutcomeSchema>;
 export type TimeRange = z.infer<typeof TimeRangeSchema>;
 export type EntityRef = z.infer<typeof EntityRefSchema>;
 export type TypedValue = z.infer<typeof TypedValueSchema>;
@@ -367,3 +474,6 @@ export type LifeThread = z.infer<typeof LifeThreadSchema>;
 export type ThreadTransition = z.infer<typeof ThreadTransitionSchema>;
 export type ProspectiveEvidence = z.infer<typeof ProspectiveEvidenceSchema>;
 export type ProspectiveMemory = z.infer<typeof ProspectiveMemorySchema>;
+export type RelationshipEventPayload = z.infer<typeof RelationshipEventPayloadSchema>;
+export type RelationshipEventInput = z.infer<typeof RelationshipEventInputSchema>;
+export type RelationshipEvent = z.infer<typeof RelationshipEventSchema>;
