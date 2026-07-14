@@ -125,8 +125,18 @@ export async function analyzeCapture(input: CaptureProcessorInput): Promise<Capt
 }
 
 async function processCapture(input: CaptureProcessorInput) {
+  const ledgerLifecycleEvent =
+    input.source.startsWith("recall-ledger#user-confirmed") &&
+    /^\s*(Done|Cancelled|Canceled):/i.test(input.content);
   const analysis = await analyzeCapture(input);
-  const { envelope, conflict, openLedger, supersededIndex } = analysis;
+  const { envelope, openLedger } = analysis;
+  const conflict = ledgerLifecycleEvent ? null : analysis.conflict;
+  const supersededIndex = ledgerLifecycleEvent ? null : analysis.supersededIndex;
+  const commitmentEvent =
+    !ledgerLifecycleEvent &&
+    (envelope?.type === "commitment" ||
+      input.kind === "commitment" ||
+      typeof envelope?.supersedes === "number");
   const hints = envelope?.hints?.length ? `\n\n(answers: ${envelope.hints.join(" · ")})` : "";
   const content = (input.content.length > 800 ? input.content : (envelope?.text ?? input.content)) + hints;
   const canonicalMetadata: Record<string, string | number> = {};
@@ -145,7 +155,7 @@ async function processCapture(input: CaptureProcessorInput) {
     containerTag: spaceTag(input.space),
     metadata: {
       source: input.source,
-      type: envelope?.type ?? input.kind,
+      type: ledgerLifecycleEvent ? "event" : (envelope?.type ?? input.kind),
       provenance: envelope?.provenance ?? "stated",
       salience: envelope?.salience ?? 0.5,
       valence: envelope?.valence ?? 0,
@@ -164,9 +174,7 @@ async function processCapture(input: CaptureProcessorInput) {
               .join(", "),
           }
         : {}),
-      ...(envelope?.type === "commitment" ||
-      input.kind === "commitment" ||
-      typeof envelope?.supersedes === "number"
+      ...(commitmentEvent
         ? {
             status: "open",
             ...(envelope?.due ?? input.due ? { due: envelope?.due ?? input.due } : {}),
@@ -206,7 +214,7 @@ async function processCapture(input: CaptureProcessorInput) {
     superseded = old.content;
   }
 
-  const embedded = (envelope?.commitments ?? []).filter(
+  const embedded = (ledgerLifecycleEvent ? [] : (envelope?.commitments ?? [])).filter(
     (commitment) => commitment.content.trim() && envelope?.type !== "commitment",
   );
   await Promise.all(

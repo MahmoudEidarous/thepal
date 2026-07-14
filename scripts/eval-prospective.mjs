@@ -36,7 +36,10 @@ const engineDoc = (id) =>
     headers: { Authorization: `Bearer ${KEY}` },
   }).then((response) => response.json().catch(() => ({})));
 const settle = async (id) => {
-  for (let i = 0; i < 40; i++) {
+  // A cold local Supermemory worker can spend more than 40 seconds on the
+  // first document after startup. This is a lifecycle race gate, not a
+  // latency assertion, so leave enough room for cold processing to settle.
+  for (let i = 0; i < 80; i++) {
     const doc = await engineDoc(id);
     if (doc.status === "done" || doc.status === "failed") return doc.status;
     await new Promise((resolve) => setTimeout(resolve, 1000));

@@ -54,6 +54,18 @@ Use stable, narrow predicates from this vocabulary whenever possible:
 - boundary
 - safety.constraint
 - state.status
+- thread.status
+- project.status
+- goal
+- goal.status
+- problem
+- problem.status
+- waiting.for
+- waiting.status
+- expected.next
+- health.symptom
+- health.plan
+- health.status
 - relationship
 - location
 - decision
@@ -62,6 +74,8 @@ Use stable, narrow predicates from this vocabulary whenever possible:
 - attribute
 
 subject.kind=user means the user who spoke. Use another entity when the sentence is about a person, place, project, organization, routine, or thing.
+
+For ongoing situations, keep the named situation as the subject whenever the message provides one. "The Vienna pilot is blocked" is subject Vienna pilot, predicate project.status, object blocked. Use lifecycle predicates only when the lifecycle state is explicit; never invent an open loop merely because a topic was mentioned.
 
 polarity=1 asserts the proposition; polarity=-1 explicitly denies it. "I do not like oat milk" is predicate=preference, object="oat milk", polarity=-1.
 
@@ -107,6 +121,12 @@ function normalizePredicate(value: string) {
     "prefers": "preference",
     "emotion": "emotion.state",
     "mood": "emotion.state",
+    "project.state": "project.status",
+    "goal.state": "goal.status",
+    "problem.state": "problem.status",
+    "health.state": "health.status",
+    "waiting.for.response": "waiting.for",
+    "expected.next.event": "expected.next",
   };
   return aliases[normalized] ?? (normalized || "attribute");
 }
@@ -116,6 +136,7 @@ function normalizedSubjectKind(
   kind: ClaimCandidate["subject"]["kind"],
 ): ClaimCandidate["subject"]["kind"] {
   if (predicate === "meeting.scheduled_for") return "project";
+  if (predicate.startsWith("project.")) return "project";
   if (predicate === "routine.pattern") return "routine";
   return kind;
 }

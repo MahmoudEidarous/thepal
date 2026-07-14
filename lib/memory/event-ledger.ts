@@ -6,12 +6,14 @@ import type {
   CaptureEvidencePayload,
   ClaimRelation,
   EventKind,
+  LifeThread,
   MemoryClaim,
   MemoryEvent,
   MemoryReceipt,
   MemorySource,
   MemorySpace,
   Sensitivity,
+  ThreadTransition,
 } from "./contracts";
 
 type SqliteModule = typeof import("node:sqlite");
@@ -35,7 +37,7 @@ function sqliteConstructor(): SqliteModule["DatabaseSync"] {
 }
 
 const CONTRACT_VERSION = 1 as const;
-const SCHEMA_VERSION = 2 as const;
+const SCHEMA_VERSION = 3 as const;
 const MAX_JOB_ATTEMPTS = 5;
 const PROCESSING_JOB_KIND = "enrich_and_index" as const;
 
@@ -106,6 +108,7 @@ export type DeletionPreview = {
   expiresAt: string;
   claims: number;
   affectedBeliefs: string[];
+  affectedThreads: string[];
   mirrored: boolean;
 };
 
@@ -143,6 +146,8 @@ export type LedgerStats = {
   stateJobs: Record<MemoryJobStatus, number>;
   claims: number;
   beliefs: number;
+  threads: number;
+  threadTransitions: number;
   mirrors: number;
 };
 
@@ -296,6 +301,52 @@ const MIGRATION_2 = `
   ) STRICT;
 `;
 
+const MIGRATION_3 = `
+  CREATE TABLE IF NOT EXISTS memory_threads (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    anchor_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('decision','project','relationship','health','place','routine','goal','problem','waiting')),
+    status TEXT NOT NULL CHECK (status IN ('emerging','open','waiting','blocked','resolved','dormant')),
+    current_state_json TEXT NOT NULL CHECK (json_valid(current_state_json)),
+    participants_json TEXT NOT NULL CHECK (json_valid(participants_json)),
+    commitments_json TEXT NOT NULL CHECK (json_valid(commitments_json)),
+    expected_next_json TEXT CHECK (expected_next_json IS NULL OR json_valid(expected_next_json)),
+    last_meaningful_change_at TEXT NOT NULL,
+    next_review_at TEXT,
+    evidence_event_ids_json TEXT NOT NULL CHECK (json_valid(evidence_event_ids_json)),
+    belief_keys_json TEXT NOT NULL CHECK (json_valid(belief_keys_json)),
+    resolution_json TEXT CHECK (resolution_json IS NULL OR json_valid(resolution_json)),
+    confidence TEXT NOT NULL CHECK (confidence IN ('direct','strong','tentative','conflicting')),
+    projector_version TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, space, anchor_key)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_threads_active
+    ON memory_threads(user_id, space, status, last_meaningful_change_at DESC);
+  CREATE INDEX IF NOT EXISTS memory_threads_subject
+    ON memory_threads(user_id, space, anchor_key);
+
+  CREATE TABLE IF NOT EXISTS memory_thread_transitions (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL REFERENCES memory_threads(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('created','state_updated','status_changed','became_dormant')),
+    from_status TEXT CHECK (from_status IS NULL OR from_status IN ('emerging','open','waiting','blocked','resolved','dormant')),
+    to_status TEXT NOT NULL CHECK (to_status IN ('emerging','open','waiting','blocked','resolved','dormant')),
+    occurred_at TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    state_text TEXT NOT NULL,
+    evidence_event_ids_json TEXT NOT NULL CHECK (json_valid(evidence_event_ids_json)),
+    projector_version TEXT NOT NULL
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_thread_transitions_time
+    ON memory_thread_transitions(thread_id, occurred_at, id);
+`;
+
 function text(row: SqlRow, key: string): string {
   const value = row[key];
   if (typeof value !== "string") throw new Error(`memory ledger: ${key} is not text`);
@@ -425,6 +476,52 @@ function beliefFromRow(row: SqlRow): Belief {
   };
 }
 
+function threadFromRow(row: SqlRow): LifeThread {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    space: text(row, "space") as MemorySpace,
+    anchorKey: text(row, "anchor_key"),
+    title: text(row, "title"),
+    kind: text(row, "kind") as LifeThread["kind"],
+    status: text(row, "status") as LifeThread["status"],
+    currentState: JSON.parse(text(row, "current_state_json")) as LifeThread["currentState"],
+    participants: JSON.parse(text(row, "participants_json")) as LifeThread["participants"],
+    commitments: JSON.parse(text(row, "commitments_json")) as LifeThread["commitments"],
+    expectedNext: nullableText(row, "expected_next_json")
+      ? (JSON.parse(text(row, "expected_next_json")) as LifeThread["expectedNext"])
+      : null,
+    lastMeaningfulChangeAt: text(row, "last_meaningful_change_at"),
+    nextReviewAt: nullableText(row, "next_review_at"),
+    evidenceEventIds: JSON.parse(
+      text(row, "evidence_event_ids_json"),
+    ) as LifeThread["evidenceEventIds"],
+    beliefKeys: JSON.parse(text(row, "belief_keys_json")) as LifeThread["beliefKeys"],
+    resolution: nullableText(row, "resolution_json")
+      ? (JSON.parse(text(row, "resolution_json")) as LifeThread["resolution"])
+      : null,
+    confidence: text(row, "confidence") as LifeThread["confidence"],
+    projectorVersion: text(row, "projector_version"),
+  };
+}
+
+function threadTransitionFromRow(row: SqlRow): ThreadTransition {
+  return {
+    id: text(row, "id"),
+    threadId: text(row, "thread_id"),
+    kind: text(row, "kind") as ThreadTransition["kind"],
+    fromStatus: nullableText(row, "from_status") as ThreadTransition["fromStatus"],
+    toStatus: text(row, "to_status") as ThreadTransition["toStatus"],
+    at: text(row, "occurred_at"),
+    reason: text(row, "reason"),
+    state: text(row, "state_text"),
+    evidenceEventIds: JSON.parse(
+      text(row, "evidence_event_ids_json"),
+    ) as ThreadTransition["evidenceEventIds"],
+    projectorVersion: text(row, "projector_version"),
+  };
+}
+
 function mirrorFromRow(row: SqlRow): MemoryMirror {
   return {
     eventId: text(row, "event_id"),
@@ -500,6 +597,23 @@ export class MemoryEventLedger {
           )
           .run(2, "claims, temporal beliefs, and state jobs", now);
         this.database.exec("PRAGMA user_version = 2");
+        this.database.exec("COMMIT");
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    }
+    if (current < 3) {
+      const now = new Date().toISOString();
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(MIGRATION_3);
+        this.database
+          .prepare(
+            "INSERT OR IGNORE INTO memory_schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+          )
+          .run(3, "living threads and open-loop projections", now);
+        this.database.exec("PRAGMA user_version = 3");
         this.database.exec("COMMIT");
       } catch (error) {
         this.database.exec("ROLLBACK");
@@ -650,6 +764,17 @@ export class MemoryEventLedger {
       | SqlRow
       | undefined;
     return row ? eventFromRow(row) : null;
+  }
+
+  listActiveEvents(userId: string, space: MemorySpace): MemoryEvent[] {
+    const rows = this.database
+      .prepare(`
+        SELECT * FROM memory_events
+        WHERE user_id = ? AND space = ? AND tombstoned_at IS NULL
+        ORDER BY recorded_at, id
+      `)
+      .all(userId, space) as SqlRow[];
+    return rows.map(eventFromRow);
   }
 
   getJob(id: string): MemoryJob | null {
@@ -1157,7 +1282,7 @@ export class MemoryEventLedger {
       conditions.push("predicate = ?");
       values.push(options.predicate);
     }
-    const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
+    const limit = Math.max(1, Math.min(5_000, Math.floor(options.limit ?? 100)));
     values.push(limit);
     const rows = this.database
       .prepare(`
@@ -1171,6 +1296,158 @@ export class MemoryEventLedger {
       `)
       .all(...values) as SqlRow[];
     return rows.map(beliefFromRow);
+  }
+
+  replaceThreadProjection(
+    userId: string,
+    space: MemorySpace,
+    threads: LifeThread[],
+    transitions: ThreadTransition[],
+    now = new Date().toISOString(),
+  ) {
+    if (threads.some((thread) => thread.userId !== userId || thread.space !== space)) {
+      throw new Error("memory ledger: thread projection crossed a user or memory space");
+    }
+    const threadIds = new Set(threads.map((thread) => thread.id));
+    if (transitions.some((transition) => !threadIds.has(transition.threadId))) {
+      throw new Error("memory ledger: thread transition references a different projection");
+    }
+
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database
+        .prepare("DELETE FROM memory_threads WHERE user_id = ? AND space = ?")
+        .run(userId, space);
+
+      const insertThread = this.database.prepare(`
+        INSERT INTO memory_threads(
+          id, user_id, space, anchor_key, title, kind, status,
+          current_state_json, participants_json, commitments_json,
+          expected_next_json, last_meaningful_change_at, next_review_at,
+          evidence_event_ids_json, belief_keys_json, resolution_json,
+          confidence, projector_version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const thread of threads) {
+        insertThread.run(
+          thread.id,
+          userId,
+          space,
+          thread.anchorKey,
+          thread.title,
+          thread.kind,
+          thread.status,
+          JSON.stringify(thread.currentState),
+          JSON.stringify(thread.participants),
+          JSON.stringify(thread.commitments),
+          thread.expectedNext ? JSON.stringify(thread.expectedNext) : null,
+          thread.lastMeaningfulChangeAt,
+          thread.nextReviewAt,
+          JSON.stringify(thread.evidenceEventIds),
+          JSON.stringify(thread.beliefKeys),
+          thread.resolution ? JSON.stringify(thread.resolution) : null,
+          thread.confidence,
+          thread.projectorVersion,
+          now,
+        );
+      }
+
+      const insertTransition = this.database.prepare(`
+        INSERT INTO memory_thread_transitions(
+          id, thread_id, kind, from_status, to_status, occurred_at,
+          reason, state_text, evidence_event_ids_json, projector_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const transition of transitions) {
+        insertTransition.run(
+          transition.id,
+          transition.threadId,
+          transition.kind,
+          transition.fromStatus,
+          transition.toStatus,
+          transition.at,
+          transition.reason,
+          transition.state,
+          JSON.stringify(transition.evidenceEventIds),
+          transition.projectorVersion,
+        );
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listThreads(options: {
+    userId?: string;
+    space: MemorySpace;
+    id?: string;
+    status?: LifeThread["status"];
+    kind?: LifeThread["kind"];
+    anchorKey?: string;
+    activeOnly?: boolean;
+    limit?: number;
+  }): LifeThread[] {
+    const conditions = ["user_id = ?", "space = ?"];
+    const values: Array<string | number> = [options.userId ?? "local-user", options.space];
+    if (options.id) {
+      conditions.push("id = ?");
+      values.push(options.id);
+    }
+    if (options.status) {
+      conditions.push("status = ?");
+      values.push(options.status);
+    }
+    if (options.kind) {
+      conditions.push("kind = ?");
+      values.push(options.kind);
+    }
+    if (options.anchorKey) {
+      conditions.push("anchor_key = ?");
+      values.push(options.anchorKey);
+    }
+    if (options.activeOnly) conditions.push("status NOT IN ('resolved','dormant')");
+    const limit = Math.max(1, Math.min(5_000, Math.floor(options.limit ?? 100)));
+    values.push(limit);
+    const rows = this.database
+      .prepare(`
+        SELECT * FROM memory_threads
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY CASE status
+          WHEN 'blocked' THEN 0 WHEN 'waiting' THEN 1 WHEN 'open' THEN 2
+          WHEN 'emerging' THEN 3 WHEN 'dormant' THEN 4 ELSE 5 END,
+          last_meaningful_change_at DESC, title, id
+        LIMIT ?
+      `)
+      .all(...values) as SqlRow[];
+    return rows.map(threadFromRow);
+  }
+
+  listThreadTransitions(options: {
+    userId?: string;
+    space: MemorySpace;
+    threadId?: string;
+    limit?: number;
+  }): ThreadTransition[] {
+    const conditions = ["t.user_id = ?", "t.space = ?"];
+    const values: Array<string | number> = [options.userId ?? "local-user", options.space];
+    if (options.threadId) {
+      conditions.push("x.thread_id = ?");
+      values.push(options.threadId);
+    }
+    const limit = Math.max(1, Math.min(2_000, Math.floor(options.limit ?? 500)));
+    values.push(limit);
+    const rows = this.database
+      .prepare(`
+        SELECT x.* FROM memory_thread_transitions x
+        JOIN memory_threads t ON t.id = x.thread_id
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY x.occurred_at, x.id
+        LIMIT ?
+      `)
+      .all(...values) as SqlRow[];
+    return rows.map(threadTransitionFromRow);
   }
 
   listClaimRelations(userId: string, space: MemorySpace): StoredClaimRelation[] {
@@ -1204,12 +1481,19 @@ export class MemoryEventLedger {
     const affectedBeliefs = this.listBeliefs({
       userId: event.userId,
       space: event.space,
-      limit: 500,
+      limit: 5_000,
     })
       .filter((belief) =>
         [...belief.support, ...belief.opposition].some((claimId) => claimIds.has(claimId)),
       )
       .map((belief) => belief.key);
+    const affectedThreads = this.listThreads({
+      userId: event.userId,
+      space: event.space,
+      limit: 5_000,
+    })
+      .filter((thread) => thread.evidenceEventIds.includes(eventId))
+      .map((thread) => thread.id);
     const token = randomUUID();
     const issuedAt = options.now ?? new Date().toISOString();
     const expiresAt = new Date(
@@ -1227,6 +1511,7 @@ export class MemoryEventLedger {
       expiresAt,
       claims: claims.length,
       affectedBeliefs,
+      affectedThreads,
       mirrored: this.getMirror(eventId)?.status === "synced",
     };
   }
@@ -1272,6 +1557,13 @@ export class MemoryEventLedger {
       this.database.prepare("DELETE FROM memory_claims WHERE event_id = ?").run(eventId);
       this.database
         .prepare("DELETE FROM memory_beliefs WHERE user_id = ? AND space = ?")
+        .run(event.userId, event.space);
+      // Threads are rebuildable projections. Clear the whole scoped view
+      // inside the deletion transaction so a tombstoned event can never
+      // remain visible through a stale open loop if the process stops before
+      // the immediate rebuild finishes.
+      this.database
+        .prepare("DELETE FROM memory_threads WHERE user_id = ? AND space = ?")
         .run(event.userId, event.space);
       this.database
         .prepare(`
@@ -1358,6 +1650,8 @@ export class MemoryEventLedger {
       stateJobs: statusCounts("memory_state_jobs"),
       claims: count("memory_claims"),
       beliefs: count("memory_beliefs"),
+      threads: count("memory_threads"),
+      threadTransitions: count("memory_thread_transitions"),
       mirrors: count("memory_mirrors"),
     };
   }

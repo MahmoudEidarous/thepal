@@ -21,6 +21,8 @@ function publicStats() {
     stateJobs: stats.stateJobs,
     claims: stats.claims,
     beliefs: stats.beliefs,
+    threads: stats.threads,
+    threadTransitions: stats.threadTransitions,
     mirrors: stats.mirrors,
   };
 }

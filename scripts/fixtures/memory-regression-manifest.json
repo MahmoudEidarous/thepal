@@ -28,6 +28,11 @@
       "expected": "49 checks passing"
     },
     {
+      "name": "living threads and open loops",
+      "command": "npm run eval:memory-threads",
+      "expected": "49 checks passing"
+    },
+    {
       "name": "memory concurrency and crash recovery",
       "command": "npm run eval:memory-stress",
       "expected": "12 checks passing"

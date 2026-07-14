@@ -1,5 +1,6 @@
 import { rebuildBeliefs } from "./belief-projector";
 import { extractClaimsForEvent } from "./extractor";
+import { rebuildThreads } from "./thread-engine";
 import {
   getMemoryEventLedger,
   type MemoryEventLedger,
@@ -17,6 +18,7 @@ export type StateProcessingOutcome = {
   kind?: MemoryStateJob["kind"];
   claims?: number;
   beliefs?: number;
+  threads?: number;
   excludedClaims?: number;
   error?: string;
 };
@@ -100,12 +102,14 @@ async function processClaimedStateJob(
 
     if (event.tombstonedAt) {
       const projection = rebuildBeliefs(ledger, event.userId, event.space, { asOf });
+      const threadProjection = rebuildThreads(ledger, event.userId, event.space, { asOf });
       ledger.markStateJobSucceeded(job.id);
       return {
         state: "succeeded",
         kind: job.kind,
         claims: 0,
         beliefs: projection.beliefs.length,
+        threads: threadProjection.threads.length,
         excludedClaims: projection.excludedClaimIds.length,
       };
     }
@@ -122,12 +126,14 @@ async function processClaimedStateJob(
     );
     ledger.replaceClaimsForEvent(event.id, claims);
     const projection = rebuildBeliefs(ledger, event.userId, event.space, { asOf });
+    const threadProjection = rebuildThreads(ledger, event.userId, event.space, { asOf });
     ledger.markStateJobSucceeded(job.id);
     return {
       state: "succeeded",
       kind: job.kind,
       claims: claims.length,
       beliefs: projection.beliefs.length,
+      threads: threadProjection.threads.length,
       excludedClaims: projection.excludedClaimIds.length,
     };
   } catch (error) {

@@ -4,6 +4,7 @@ import { rebuildBeliefs } from "@/lib/memory/belief-projector";
 import { getMemoryEventLedger } from "@/lib/memory/event-ledger";
 import { scheduleMemoryReconciliation } from "@/lib/memory/reconcile-scheduler";
 import { processStateJob } from "@/lib/memory/state-reconciler";
+import { rebuildThreads } from "@/lib/memory/thread-engine";
 
 export const runtime = "nodejs";
 
@@ -79,7 +80,10 @@ export async function POST(request: Request) {
       }
       forgotten += 1;
     }
-    for (const space of rebuildSpaces) rebuildBeliefs(ledger, "local-user", space);
+    for (const space of rebuildSpaces) {
+      rebuildBeliefs(ledger, "local-user", space);
+      rebuildThreads(ledger, "local-user", space);
+    }
 
     for (const m of matches) {
       const documentId = m.documents?.[0]?.id;

@@ -1,7 +1,12 @@
-import { supermemory, spaceTag } from "@/lib/supermemory";
+import { spaceTag } from "@/lib/supermemory";
 import { apiError, asSpace } from "@/lib/validate";
 import { localToday } from "@/lib/envelope";
 import { openCommitments, setLedgerStatus } from "@/lib/ledger";
+import { processCaptureJob } from "@/lib/memory/reconciler";
+import { scheduleMemoryReconciliation } from "@/lib/memory/reconcile-scheduler";
+import { captureEvidence } from "@/lib/memory/write-broker";
+
+export const runtime = "nodejs";
 
 // Done things stay done: closing a commitment PATCHes its metadata to
 // status=done (the ledger forgets nothing) and writes a dated
@@ -14,7 +19,8 @@ export async function POST(request: Request) {
     if (!q && !id) {
       return Response.json({ error: "q or id required" }, { status: 400 });
     }
-    const tag = spaceTag(asSpace(body.space));
+    const space = asSpace(body.space);
+    const tag = spaceTag(space);
     const open = await openCommitments(tag);
     if (!open.length) {
       return Response.json({ error: "no open commitments" }, { status: 404 });
@@ -47,21 +53,34 @@ export async function POST(request: Request) {
     // setLedgerStatus handles the engine's sharp edges: settle races and
     // failed-immutable docs (which it rebirths rather than losing)
     await setLedgerStatus(tag, match.id, { status: outcome, completedAt: today });
-    await supermemory.add({
-      content:
-        outcome === "done"
-          ? `Done: ${match.content} (completed ${today})`
-          : `Cancelled: ${match.content} (called off ${today})`,
-      containerTag: tag,
-      metadata: {
-        source: "recall-ledger",
-        type: "event",
-        provenance: "stated",
-        storyDate: today,
-        salience: 0.55,
-      },
+    const completionContent =
+      outcome === "done"
+        ? `Done: ${match.content} (completed ${today})`
+        : `Cancelled: ${match.content} (called off ${today})`;
+    // Completion is user-confirmed evidence, not provider-only metadata.
+    // Filing it through the canonical broker lets beliefs, threads, deletion,
+    // replay, and the semantic mirror all observe the same lifecycle event.
+    const completion = captureEvidence({
+      content: completionContent,
+      space,
+      source: "recall-ledger#user-confirmed",
+      kind: "memory",
+      userId: "local-user",
+      idempotencyKey: `ledger-completion:${match.id}:${outcome}:${today}`,
     });
-    return Response.json({ completed: match.content, due: match.due, on: today, outcome });
+    scheduleMemoryReconciliation(100);
+    const mirrored = await processCaptureJob(completion.receipt.jobId);
+    if (mirrored.state === "pending" || mirrored.state === "dead") {
+      scheduleMemoryReconciliation();
+    }
+    return Response.json({
+      completed: match.content,
+      due: match.due,
+      on: today,
+      outcome,
+      receipt: completion.receipt,
+      memoryStatus: mirrored.state,
+    });
   } catch (err) {
     return apiError(err);
   }

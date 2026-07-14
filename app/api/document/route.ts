@@ -4,6 +4,7 @@ import { rebuildBeliefs } from "@/lib/memory/belief-projector";
 import { getMemoryEventLedger } from "@/lib/memory/event-ledger";
 import { scheduleMemoryReconciliation } from "@/lib/memory/reconcile-scheduler";
 import { processStateJob } from "@/lib/memory/state-reconciler";
+import { rebuildThreads } from "@/lib/memory/thread-engine";
 
 export const runtime = "nodejs";
 
@@ -46,6 +47,7 @@ export async function DELETE(request: Request) {
       const preview = ledger.createDeletionPreview(eventId);
       const deleted = ledger.tombstoneWithConsent(preview.token);
       const projection = rebuildBeliefs(ledger, deleted.event.userId, deleted.event.space);
+      const threadProjection = rebuildThreads(ledger, deleted.event.userId, deleted.event.space);
       const purge = deleted.purgeJob
         ? await processStateJob(deleted.purgeJob.id, { ledger })
         : null;
@@ -57,6 +59,7 @@ export async function DELETE(request: Request) {
         canonical: true,
         eventId,
         beliefsRebuilt: projection.beliefs.length,
+        threadsRebuilt: threadProjection.threads.length,
         purge: purge?.state ?? "not_needed",
       });
     }
