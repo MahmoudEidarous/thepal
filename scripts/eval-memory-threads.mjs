@@ -143,6 +143,61 @@ try {
     "the thread preserves both tellings as grounded history",
   );
 
+  const meridianOld = append("Project Meridian review is on July 27th.", {
+    requestedKind: "commitment",
+    due: "2026-07-27",
+    recordedAt: "2026-07-11T09:30:00.000Z",
+  });
+  fileClaims(meridianOld.event, [
+    candidate({
+      subject: { kind: "project", label: "Project Meridian" },
+      predicate: "meeting.scheduled_for",
+      object: { type: "date", value: "2026-07-27" },
+    }),
+  ]);
+  rebuild();
+  const meridianThreadId = thread("Project Meridian").id;
+  const meridianNew = append("Project Meridian review moved to July 24th.", {
+    requestedKind: "commitment",
+    due: "2026-07-24",
+    recordedAt: "2026-07-14T09:30:00.000Z",
+  });
+  fileClaims(meridianNew.event, [
+    candidate({
+      subject: { kind: "project", label: "Project Meridian review" },
+      predicate: "meeting.scheduled_for",
+      object: { type: "date", value: "2026-07-24" },
+      relationHint: "supersede",
+    }),
+  ]);
+  rebuild();
+  const meridianThreads = ledger
+    .listThreads({ userId: "fixture-user", space: "eval", limit: 500 })
+    .filter((item) => item.title.toLowerCase().includes("meridian"));
+  check(meridianThreads.length === 1, "an explicit renamed update remains one life thread");
+  check(meridianThreads[0].id === meridianThreadId, "a renamed update preserves the original thread identity");
+  check(meridianThreads[0].expectedNext?.by?.start === "2026-07-24", "the renamed thread follows the latest applicable date");
+  check(
+    meridianThreads[0].commitments.filter((item) => item.status === "open").length === 1 &&
+      meridianThreads[0].commitments.filter((item) => item.status === "superseded").length === 1,
+    "a renamed reschedule leaves only the latest canonical commitment open",
+  );
+
+  const viennaFlight = append("The Vienna flight moved to July 26th.", {
+    recordedAt: "2026-07-14T09:45:00.000Z",
+  });
+  fileClaims(viennaFlight.event, [
+    candidate({
+      subject: { kind: "project", label: "Vienna flight" },
+      predicate: "meeting.scheduled_for",
+      object: { type: "date", value: "2026-07-26" },
+      relationHint: "supersede",
+    }),
+  ]);
+  rebuild();
+  check(!!thread("Vienna flight"), "a changed nearby situation does not merge on one shared word");
+  check(!!thread("Vienna call"), "the original nearby situation keeps its own thread");
+
   const visaWaiting = append("My visa application is waiting for the embassy response.", {
     recordedAt: "2026-07-12T10:00:00.000Z",
   });

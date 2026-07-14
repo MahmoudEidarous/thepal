@@ -266,6 +266,7 @@ try {
       status: "waiting",
       nextReviewAt: "2026-07-13T12:00:00.000Z",
       expectedBy: "2026-07-13",
+      expectedNext: "interview result",
     },
   });
   const followUp = decide({
@@ -274,6 +275,7 @@ try {
     now: moment({ kind: "session_start", query: "" }),
   });
   check(followUp.surface?.kind === "thread_follow_up", "a due grounded life-thread review can become one specific follow-up");
+  check(followUp.surface?.instruction.includes("interview result"), "thread follow-up names the grounded expected development");
   const tentativeThread = decide({
     mode: "active",
     ctx: context({ activeThreads: [{ ...reviewedThread, confidence: "tentative" }] }),

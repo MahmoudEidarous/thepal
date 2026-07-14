@@ -33,6 +33,12 @@ type Descriptor = {
 type ThreadGroup = Descriptor & {
   beliefs: Belief[];
   primaryBeliefKeys: Set<string>;
+  titleUpdatedAt: string;
+};
+
+type ThreadEntry = {
+  belief: Belief;
+  descriptor: Descriptor;
 };
 
 const STATUS_PREDICATES = new Set([
@@ -338,6 +344,115 @@ function relatedText(left: string, right: string) {
   return overlap >= needed;
 }
 
+// Thread identity is stricter than retrieval similarity. Two anchors may only
+// join when the user explicitly changed/corrected the same predicate (or used
+// the correction API) and one entity label contains the other. This catches
+// extraction drift such as "Project Meridian" -> "Project Meridian review"
+// without merging nearby situations such as "Vienna call" and "Vienna flight".
+function compatibleChangedEntity(left: string, right: string) {
+  const a = normalize(left);
+  const b = normalize(right);
+  return a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a));
+}
+
+function threadAnchorAliases(entries: ThreadEntry[], claimEvidence: ClaimEvidence[]) {
+  const parent = new Map<string, string>();
+  const firstSeen = new Map<string, string>();
+  const descriptorByAnchor = new Map<string, Descriptor>();
+  const anchorsByClaim = new Map<string, Set<string>>();
+  const anchorsByEvent = new Map<string, Set<string>>();
+  const supersededByEvent = new Map<string, string>();
+
+  const remember = (map: Map<string, Set<string>>, key: string, anchor: string) => {
+    const values = map.get(key) ?? new Set<string>();
+    values.add(anchor);
+    map.set(key, values);
+  };
+  for (const entry of entries) {
+    const anchor = entry.descriptor.anchorKey;
+    parent.set(anchor, anchor);
+    descriptorByAnchor.set(anchor, entry.descriptor);
+    const seen = firstSeen.get(anchor);
+    if (!seen || entry.belief.systemTime.start < seen) {
+      firstSeen.set(anchor, entry.belief.systemTime.start);
+    }
+    for (const claimId of entry.belief.support) remember(anchorsByClaim, claimId, anchor);
+  }
+  for (const evidence of claimEvidence) {
+    for (const anchor of anchorsByClaim.get(evidence.claim.id) ?? []) {
+      remember(anchorsByEvent, evidence.claim.eventId, anchor);
+    }
+  }
+
+  const root = (anchor: string): string => {
+    const direct = parent.get(anchor) ?? anchor;
+    if (direct === anchor) return anchor;
+    const resolved = root(direct);
+    parent.set(anchor, resolved);
+    return resolved;
+  };
+  const join = (left: string, right: string) => {
+    const a = root(left);
+    const b = root(right);
+    if (a === b) return;
+    const aSeen = firstSeen.get(a) ?? "";
+    const bSeen = firstSeen.get(b) ?? "";
+    const keepA = aSeen < bSeen || (aSeen === bSeen && a.localeCompare(b) <= 0);
+    parent.set(keepA ? b : a, keepA ? a : b);
+  };
+  const compatible = (left: string, right: string) => {
+    const a = descriptorByAnchor.get(left);
+    const b = descriptorByAnchor.get(right);
+    return !!a && !!b && a.kind === b.kind && compatibleChangedEntity(a.title, b.title);
+  };
+
+  // An explicit correction event is the strongest identity edge available.
+  for (const evidence of claimEvidence) {
+    if (!evidence.revisionOf) continue;
+    supersededByEvent.set(evidence.revisionOf, evidence.claim.eventId);
+    for (const current of anchorsByEvent.get(evidence.claim.eventId) ?? []) {
+      for (const previous of anchorsByEvent.get(evidence.revisionOf) ?? []) {
+        if (compatible(current, previous)) join(current, previous);
+      }
+    }
+  }
+
+  // Voice captures can express a correction before they know a canonical
+  // target event. In that path the extractor emits relationHint=supersede.
+  // Search backward only within the same predicate, then accept the newest
+  // conservatively compatible entity.
+  const previousByPredicate = new Map<string, ClaimEvidence[]>();
+  for (const evidence of [...claimEvidence].sort(
+    (left, right) =>
+      left.recordedAt.localeCompare(right.recordedAt) || left.claim.id.localeCompare(right.claim.id),
+  )) {
+    const previous = previousByPredicate.get(evidence.claim.predicate) ?? [];
+    if (evidence.claim.relationHint === "supersede") {
+      const currentAnchors = [...(anchorsByClaim.get(evidence.claim.id) ?? [])];
+      for (const current of currentAnchors) {
+        for (let index = previous.length - 1; index >= 0; index -= 1) {
+          const candidate = previous[index];
+          const candidateAnchors = [...(anchorsByClaim.get(candidate.claim.id) ?? [])];
+          const match = candidateAnchors.find(
+            (prior) => root(prior) === root(current) || compatible(prior, current),
+          );
+          if (!match) continue;
+          if (root(match) !== root(current)) join(current, match);
+          supersededByEvent.set(candidate.claim.eventId, evidence.claim.eventId);
+          break;
+        }
+      }
+    }
+    previous.push(evidence);
+    previousByPredicate.set(evidence.claim.predicate, previous);
+  }
+
+  return {
+    canonicalAnchor: (anchor: string) => (parent.has(anchor) ? root(anchor) : anchor),
+    supersededByEvent,
+  };
+}
+
 function closureEvent(event: MemoryEvent) {
   const match = event.payload.content.match(/^\s*(Done|Cancelled|Canceled):\s*(.+?)(?:\s*\((?:completed|called off).*)?$/i);
   if (!match) return null;
@@ -351,6 +466,7 @@ function commitmentsFor(
   group: ThreadGroup,
   eventIds: Set<string>,
   events: MemoryEvent[],
+  supersededByEvent: Map<string, string>,
 ): ThreadCommitmentRef[] {
   const revisions = new Map<string, MemoryEvent[]>();
   for (const event of events) {
@@ -378,13 +494,14 @@ function commitmentsFor(
       const revision = (revisions.get(event.id) ?? [])
         .filter((candidate) => candidate.payload.requested.kind === "commitment")
         .sort((left, right) => right.recordedAt.localeCompare(left.recordedAt))[0];
-      if (revision) {
+      const replacementId = supersededByEvent.get(event.id) ?? revision?.id;
+      if (replacementId) {
         return {
           eventId: event.id,
           content: event.payload.content.slice(0, 2_000),
           due: event.payload.requested.due,
           status: "superseded" as const,
-          closedByEventId: revision.id,
+          closedByEventId: replacementId,
         };
       }
       const closed = closures
@@ -490,14 +607,36 @@ export function projectThreads(
   const claims = new Map(input.claimEvidence.map((evidence) => [evidence.claim.id, evidence]));
   const groups = new Map<string, ThreadGroup>();
 
+  const entries: ThreadEntry[] = [];
   for (const belief of input.beliefs) {
     if (belief.status === "unknown") continue;
     const descriptor = descriptorFor(belief);
     if (!descriptor) continue;
-    const key = descriptor.anchorKey;
-    const group = groups.get(key) ?? { ...descriptor, beliefs: [], primaryBeliefKeys: new Set() };
+    entries.push({ belief, descriptor });
+  }
+  const { canonicalAnchor, supersededByEvent } = threadAnchorAliases(
+    entries,
+    input.claimEvidence,
+  );
+  for (const { belief, descriptor } of entries) {
+    const key = canonicalAnchor(descriptor.anchorKey);
+    const group = groups.get(key) ?? {
+      ...descriptor,
+      anchorKey: key,
+      beliefs: [],
+      primaryBeliefKeys: new Set(),
+      titleUpdatedAt: belief.systemTime.start,
+    };
     group.beliefs.push(belief);
     group.primaryBeliefKeys.add(belief.key);
+    if (
+      belief.systemTime.start > group.titleUpdatedAt ||
+      (belief.systemTime.start === group.titleUpdatedAt &&
+        descriptor.title.localeCompare(group.title) < 0)
+    ) {
+      group.title = descriptor.title;
+      group.titleUpdatedAt = belief.systemTime.start;
+    }
     groups.set(key, group);
   }
 
@@ -514,7 +653,7 @@ export function projectThreads(
     ) {
       continue;
     }
-    const group = groups.get(belief.subject.id);
+    const group = groups.get(canonicalAnchor(belief.subject.id));
     if (group && !group.beliefs.some((item) => item.key === belief.key)) {
       group.beliefs.push(belief);
     }
@@ -615,7 +754,7 @@ export function projectThreads(
     if (!currentEvidence.length || !evidenceEventIds.length) continue;
 
     const groupEventIds = new Set(evidenceEventIds);
-    const commitments = commitmentsFor(group, groupEventIds, input.events);
+    const commitments = commitmentsFor(group, groupEventIds, input.events, supersededByEvent);
     for (const commitment of commitments) {
       groupEventIds.add(commitment.eventId);
       if (commitment.closedByEventId) groupEventIds.add(commitment.closedByEventId);

@@ -35,8 +35,8 @@
     {
       "name": "living threads and open loops",
       "command": "npm run eval:memory-threads",
-      "expected": "49 checks passing",
-      "successMarker": "49/49 memory thread checks passed"
+      "expected": "55 checks passing",
+      "successMarker": "55/55 memory thread checks passed"
     },
     {
       "name": "bounded context compiler",
@@ -53,8 +53,8 @@
     {
       "name": "unified attention and intelligent silence",
       "command": "npm run eval:memory-attention",
-      "expected": "67 checks passing",
-      "successMarker": "67 memory-attention checks passed"
+      "expected": "68 checks passing",
+      "successMarker": "68 memory-attention checks passed"
     },
     {
       "name": "relationship intelligence, repair, and humor lifecycle",
@@ -77,8 +77,14 @@
     {
       "name": "knowledge source routing and tool authority",
       "command": "npm run eval:knowledge-router",
-      "expected": "162 checks passing",
-      "successMarker": "162 knowledge-router checks passed"
+      "expected": "186 checks passing",
+      "successMarker": "186 knowledge-router checks passed"
+    },
+    {
+      "name": "thread retrieval and product experience",
+      "command": "npm run eval:thread-experience",
+      "expected": "32 checks passing",
+      "successMarker": "32 thread-experience checks passed"
     }
   ]
 }

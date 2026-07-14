@@ -534,6 +534,8 @@ function obligations(context: CompiledContext, moment: AttentionMoment, signals:
 function threads(context: CompiledContext, moment: AttentionMoment, signals: AttentionMomentSignals) {
   return context.activeThreads.map((item): CandidateDraft => {
     const rel = relevance(moment.query, `${item.text} ${String(item.metadata.title ?? "")}`);
+    const title = clean(String(item.metadata.title ?? "this situation"), 220);
+    const expectedNext = clean(String(item.metadata.expectedNext ?? ""), 500);
     const reviewAt = parseInstant(item.metadata.nextReviewAt);
     const reviewDue = reviewAt !== null && reviewAt <= Date.parse(moment.at);
     const expectedAt = parseInstant(item.metadata.expectedBy);
@@ -557,7 +559,9 @@ function threads(context: CompiledContext, moment: AttentionMoment, signals: Att
       class: "proactive",
       action: "ask_thread_follow_up",
       text: item.text,
-      instruction: "Ask one specific, grounded question about the expected development. Never ask a generic ‘any updates?’ and never imply resolution.",
+      instruction: expectedNext
+        ? `Ask one specific, grounded question about ${JSON.stringify(expectedNext)} in ${JSON.stringify(title)}. Never ask a generic ‘any updates?’ and never imply resolution.`
+        : `Ask one specific, grounded question about ${JSON.stringify(title)}. Never ask a generic ‘any updates?’ and never imply resolution.`,
       whyNow: expectedPassed
         ? "the expected development should already have happened"
         : reviewDue

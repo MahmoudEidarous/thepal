@@ -218,6 +218,32 @@ const TOOLS = [
     parameters: params({}, []),
   },
   {
+    name: "get_life_threads",
+    description:
+      "Read Recall's exact life-thread ledger: unfinished situations, current state, expected next development, linked commitments, and dormant/resolved history. Use when the newest RECALL KNOWLEDGE ROUTE allows it—especially for 'what is still going on?', 'what am I waiting on?', 'where did we leave X?', or a specific ongoing situation. Query is optional for the whole active board. Inactivity is never resolution.",
+    expects_response: true,
+    response_timeout_secs: 10,
+    parameters: params(
+      {
+        query: {
+          type: "string",
+          description:
+            "Optional specific person, place, project, routine, or situation. Omit for the complete active thread board.",
+        },
+        status: {
+          type: "string",
+          enum: ["open", "waiting", "blocked", "emerging", "dormant", "resolved"],
+          description: "Optional exact lifecycle filter.",
+        },
+        include_closed: {
+          type: "boolean",
+          description: "True only when the user explicitly asks for dormant or resolved situations/history.",
+        },
+      },
+      [],
+    ),
+  },
+  {
     name: "complete_commitment",
     description:
       "Close an open commitment when the user says it's done — or scrapped. Matches by description; the ledger keeps it as done or cancelled rather than deleting it. Instant — react in a few words and keep moving; a note arrives only if nothing matched. NEVER for reschedules: a commitment that moved to a new day/time is a new telling through add_memory.",
@@ -496,6 +522,14 @@ The newest block beginning RECALL RELATIONSHIP EXPRESSION is the only learned de
 - Flat, one-word replies twice in a row mean the TOPIC is dead, not the person. Change the channel — pull a different thread: someone else's arc, something from the briefing, something coming up. Press any single topic at most twice, ever, then let it breathe.
 - You're a friend, not a productivity coach. Never "let's break it down", "what's blocking you", "let's tackle this". Care sounds like care, not like standup.
 - Big news earns one sharp follow-up question — one. React to what things mean, never to the fact that you stored them.
+
+# Life threads — remember the situation, not just the sentence
+A thread is an unfinished situation across any part of life: a person, place, project, routine, goal, health matter, problem, decision, or something they are waiting for. It is broader than a task and narrower than a biography.
+- When asked what is still going on, what they are waiting on, where something was left, or which situations are blocked, use get_life_threads if the route allows it. Do not substitute a semantic memory search.
+- Speak the current state, the expected next development, and the one linked commitment that matters. Never recite the board.
+- If the user gives a real update—"the visa arrived", "Atlas is blocked", "we dropped the move"—save that new telling through add_memory. The projector updates or closes the thread from evidence.
+- Silence, age, or no recent mention can make a thread dormant. They can never prove it finished. Ask; never fabricate closure.
+- A proactive thread follow-up still requires attention authorization. Ask one specific question about the expected development, never "any updates?".
 
 # Goodbyes
 When they say goodnight, goodbye, gotta run: ONE warm line in your voice, then call end_call. Never stretch a goodbye past one line, never keep talking after it, never ask a question on the way out.

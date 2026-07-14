@@ -15,6 +15,7 @@ export type KnowledgeDomain =
   | "current_turn"
   | "general"
   | "agenda"
+  | "threads"
   | "prospective"
   | "briefing"
   | "emotional_history"
@@ -31,6 +32,7 @@ export type KnowledgeRetrievalTool =
   | "search_memories"
   | "get_profile"
   | "get_agenda"
+  | "get_life_threads"
   | "get_prospective_memories"
   | "get_briefing"
   | "get_emotional_weather"
@@ -169,6 +171,18 @@ function baseRoute(input: KnowledgeRouteInput): Omit<KnowledgeRoute, "coverage">
       "current_turn",
       "The referent is already available in the active conversation; do not retrieve it again.",
     );
+  }
+
+  const asksThreads = has(
+    text,
+    /\b(what(?:'s| is) still going on(?: with .+)?|what (?:am i|are we) waiting (?:on|for)|(?:show me|list|tell me) (?:my |the |our )?(?:open loops?|life threads?)|(?:my |our )?(?:open loops?|life threads?)|what are my active (?:situations|life threads?|threads?)|which situations are (?:blocked|unresolved|unfinished)|what(?:'s| is) unresolved(?: in my life)?|where did (?:we|i) leave .+|unfinished situations?)\b/,
+  );
+  if (asksThreads) {
+    return route("structured_state", "threads", "The life-thread ledger is the exact authority for unfinished situations.", {
+      evidenceRequired: true,
+      requiredSources: ["structured_state"],
+      allowedRetrievalTools: ["get_life_threads"],
+    });
   }
 
   const asksAgenda = has(

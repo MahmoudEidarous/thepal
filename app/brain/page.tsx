@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Dust, GRAIN } from "@/components/atmosphere";
+import { ThreadBoard, type ThreadBoardData } from "@/components/thread-board";
 import { profileName, timeAgo } from "@/lib/format";
 import type { MemoryEntry } from "@/lib/memory-types";
 
-type View = "graph" | "people" | "ledger" | "captures";
+type View = "graph" | "people" | "threads" | "ledger" | "captures";
 
 type Node = MemoryEntry & {
   x: number;
@@ -246,6 +247,7 @@ export default function Brain() {
     prospective: ProspectiveItem[];
   } | null>(null);
   const [captures, setCaptures] = useState<Capture[] | null>(null);
+  const [threadData, setThreadData] = useState<ThreadBoardData | null>(null);
   const [hintsFor, setHintsFor] = useState<Record<string, string[]>>({});
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [capQ, setCapQ] = useState("");
@@ -261,7 +263,7 @@ export default function Brain() {
   // deep link: /brain?tab=ledger
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    if (t === "ledger" || t === "captures" || t === "people")
+    if (t === "ledger" || t === "captures" || t === "people" || t === "threads")
       // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time URL read after hydration
       setView(t);
   }, []);
@@ -295,6 +297,13 @@ export default function Brain() {
       .catch(() => {});
   }, []);
 
+  const loadThreads = useCallback(() => {
+    fetch("/api/memory/threads?limit=500&transitions=true&transitionLimit=2000")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => data && setThreadData(data))
+      .catch(() => {});
+  }, []);
+
   // everything loads up front — tab switches are instant, counts are live
   useEffect(() => {
     const load = () =>
@@ -305,15 +314,17 @@ export default function Brain() {
     load();
     loadLedger();
     loadCaptures();
+    loadThreads();
     const t = setInterval(() => {
       if (!document.hidden) {
         load();
         loadLedger();
         loadCaptures();
+        loadThreads();
       }
     }, 12_000);
     return () => clearInterval(t);
-  }, [loadLedger, loadCaptures]);
+  }, [loadLedger, loadCaptures, loadThreads]);
 
   useEffect(() => {
     fetch("/api/profile")
@@ -595,6 +606,7 @@ export default function Brain() {
             [
               ["graph", entries.length],
               ["people", people.length],
+              ["threads", threadData?.rollup.active ?? 0],
               ["ledger", openCount],
               ["captures", captures?.length ?? 0],
             ] as Array<[View, number]>
@@ -1016,6 +1028,8 @@ export default function Brain() {
           </div>
         </div>
       )}
+
+      {view === "threads" && <ThreadBoard data={threadData} />}
 
       {/* ── ledger ────────────────────────────────────────────── */}
       {view === "ledger" && (

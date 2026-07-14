@@ -1026,6 +1026,26 @@ function VoiceCore({
                   : ""
           }`
         : null;
+      const threadExpected =
+        attentionSurface?.kind === "thread_follow_up" &&
+        typeof attentionSurface.metadata?.expectedNext === "string"
+          ? attentionSurface.metadata.expectedNext.trim()
+          : "";
+      const threadTitle =
+        attentionSurface?.kind === "thread_follow_up" &&
+        typeof attentionSurface.metadata?.title === "string"
+          ? attentionSurface.metadata.title.trim()
+          : "";
+      const expectedWithArticle = /^(?:a|an|the|your|their)\b/i.test(threadExpected)
+        ? threadExpected
+        : `the ${threadExpected}`;
+      const threadQuestion = !threadExpected
+        ? `${attentionSurface?.text ?? "that situation"}. What happened?`
+        : /scheduled$/i.test(threadExpected) && threadTitle
+          ? `how did ${threadTitle} go?`
+          : /\b(?:response|reply|result|approval|decision|delivery|answer)\b/i.test(threadExpected)
+            ? `did ${expectedWithArticle} come through?`
+            : `did ${threadExpected} happen?`;
       const opening =
         requiredRepair?.text
           ? `${hi} Before anything else: ${requiredRepair.text}. That was on me. I'm sorry. Let me correct it before we move on.`
@@ -1036,7 +1056,7 @@ function VoiceCore({
               : attentionSurface?.kind === "anniversary"
                 ? `${hi} ${attentionSurface.text}. That came back to me today.`
                 : attentionSurface?.kind === "thread_follow_up"
-                  ? `${hi} I've been wondering about this: ${attentionSurface.text}. What happened?`
+                  ? `${hi} I've been wondering—${threadQuestion}`
                   : `${hi} ${memoryCount} memories and counting. What's new?`;
 
       conversation.startSession({
@@ -1411,6 +1431,32 @@ function VoiceCore({
                     )
                     .join("\n")}`
                 : "No open commitments. The ledger is clear.";
+            });
+          },
+          get_life_threads: ({
+            query,
+            status,
+            include_closed,
+          }: {
+            query?: string;
+            status?: string;
+            include_closed?: boolean;
+          } = {}) => {
+            const blocked = gateKnowledgeTool("get_life_threads");
+            if (blocked) return Promise.resolve(blocked);
+            return track("following life threads", async () => {
+              const params = new URLSearchParams({
+                active:
+                  include_closed || status === "dormant" || status === "resolved" ? "false" : "true",
+                transitions: "true",
+                limit: "100",
+              });
+              if (query?.trim()) params.set("q", query.trim());
+              if (status?.trim()) params.set("status", status.trim());
+              const data = await turnJson(`/api/memory/threads?${params.toString()}`);
+              return typeof data.agentText === "string"
+                ? data.agentText
+                : "The life-thread ledger did not return a usable view. Say that honestly and keep moving.";
             });
           },
           // closing a commitment can take seconds (settle-polling a doc
