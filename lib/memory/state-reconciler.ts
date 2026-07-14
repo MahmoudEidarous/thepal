@@ -25,6 +25,12 @@ export type StateProcessingOutcome = {
   error?: string;
 };
 
+// DELETE is idempotent: a provider 404 proves the mirror is already absent.
+// Match the SDK's stable status field, never an error-message substring.
+export function isAlreadyDeletedProviderError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "status" in error && error.status === 404;
+}
+
 function alignCorrectionClaims(
   ledger: MemoryEventLedger,
   event: MemoryEvent,
@@ -91,7 +97,11 @@ async function processClaimedStateJob(
           import("../supermemory"),
           import("../fusion"),
         ]);
-        await supermemory.documents.delete(mirror.externalId);
+        try {
+          await supermemory.documents.delete(mirror.externalId);
+        } catch (error) {
+          if (!isAlreadyDeletedProviderError(error)) throw error;
+        }
         invalidateCorpus(event.space);
       } catch (error) {
         ledger.markSupermemoryMirrorDeletionFailed(event.id, error);

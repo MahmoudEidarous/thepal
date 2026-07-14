@@ -52,6 +52,9 @@ engine, and compatibility mirror; its summaries and metadata never outrank the
 canonical ledger. See [Phase 6 human continuity](docs/memory-continuity-phase-6.md)
 [Phase 7 unified attention](docs/memory-attention-phase-7.md), and
 [Phase 8 relationship intelligence](docs/memory-relationship-phase-8.md).
+[Phase 9 operational hardening](docs/memory-hardening-phase-9.md) adds one
+privacy-safe health contract and one complete release command;
+it deliberately adds no new cognitive layer.
 
 ## Run it
 
@@ -63,6 +66,7 @@ node scripts/create-voice-agent.mjs   # creates/updates the voice agent and clie
 npm install
 npm run dev
 node scripts/eval-envelope.mjs        # optional: prove the write envelope on the 20-case bank
+npm run eval:memory-release           # run the complete memory release gate
 ```
 
 Open the app, tap the orb, allow the mic, and say something worth remembering. Add `?text` to the URL for a typed-only session (same agent, same tools, no mic).

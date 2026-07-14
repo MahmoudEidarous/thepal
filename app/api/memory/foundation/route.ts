@@ -6,12 +6,19 @@ import {
 import { reconcileCaptureJobs } from "@/lib/memory/reconciler";
 import { scheduleMemoryReconciliation } from "@/lib/memory/reconcile-scheduler";
 import { reconcileStateJobs } from "@/lib/memory/state-reconciler";
+import { assessMemoryHealth } from "@/lib/memory/health";
 import { apiError, asSpace } from "@/lib/validate";
 
 export const runtime = "nodejs";
 
-function publicStats() {
-  const stats = getMemoryEventLedger().stats();
+function publicStats(ledger = getMemoryEventLedger()) {
+  const stats = ledger.stats();
+  const pendingStateJobs = [
+    ...ledger.listStateJobs("pending", 500),
+    ...ledger.listStateJobs("processing", 500),
+  ];
+  const deadJobs = ledger.listJobs("dead", 500);
+  const deadStateJobs = ledger.listStateJobs("dead", 500);
   return {
     storage: "local-sqlite",
     schemaVersion: stats.schemaVersion,
@@ -28,6 +35,7 @@ function publicStats() {
     relationshipEvents: stats.relationshipEvents,
     relationshipStates: stats.relationshipStates,
     mirrors: stats.mirrors,
+    health: assessMemoryHealth({ stats, pendingStateJobs, deadJobs, deadStateJobs }),
   };
 }
 
@@ -56,7 +64,7 @@ export async function GET() {
     const ledger = getMemoryEventLedger();
     return Response.json({
       contractVersion: 1,
-      ...publicStats(),
+      ...publicStats(ledger),
       pending: ledger.listJobs("pending", 20).map(publicJob),
       dead: ledger.listJobs("dead", 20).map(publicJob),
       statePending: ledger.listStateJobs("pending", 20).map(publicStateJob),
@@ -102,7 +110,7 @@ export async function POST(request: Request) {
         state: outcome.state,
         kind: outcome.kind,
       })),
-      stats: publicStats(),
+      stats: publicStats(ledger),
     });
   } catch (error) {
     return apiError(error);

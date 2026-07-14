@@ -1,61 +1,78 @@
 {
   "contractVersion": 1,
-  "purpose": "Frozen Phase 0 behavior gates that must stay green as the memory architecture evolves.",
+  "purpose": "Release regression gates for the complete memory architecture and its live integrations.",
   "suites": [
     {
       "name": "capture envelope",
       "command": "node scripts/eval-envelope.mjs",
-      "expected": "21/21 passing"
+      "expected": "21/21 passing",
+      "successMarker": "21/21 passed"
     },
     {
       "name": "prospective memory",
       "command": "node scripts/eval-prospective.mjs",
-      "expected": "13/13 passing"
+      "expected": "13/13 passing",
+      "successMarker": "13/13 prospective checks passed"
     },
     {
       "name": "commitment ledger",
       "command": "node scripts/eval-ledger.mjs",
-      "expected": "15/15 passing"
+      "expected": "15/15 passing",
+      "successMarker": "15/15 checks green"
     },
     {
       "name": "canonical memory foundation",
       "command": "npm run eval:memory-foundation",
-      "expected": "64 checks passing"
+      "expected": "64 checks passing",
+      "successMarker": "64 memory-foundation checks passed"
     },
     {
       "name": "claims and temporal truth",
       "command": "npm run eval:memory-truth",
-      "expected": "49 checks passing"
+      "expected": "49 checks passing",
+      "successMarker": "49 memory-truth checks passed"
     },
     {
       "name": "living threads and open loops",
       "command": "npm run eval:memory-threads",
-      "expected": "49 checks passing"
+      "expected": "49 checks passing",
+      "successMarker": "49/49 memory thread checks passed"
     },
     {
       "name": "bounded context compiler",
       "command": "npm run eval:memory-context",
-      "expected": "39 checks passing"
+      "expected": "39 checks passing",
+      "successMarker": "39 memory-context checks passed"
     },
     {
       "name": "prospective and human continuity projections",
       "command": "npm run eval:memory-continuity",
-      "expected": "39 checks passing"
+      "expected": "39 checks passing",
+      "successMarker": "39 memory-continuity checks passed"
     },
     {
       "name": "unified attention and intelligent silence",
       "command": "npm run eval:memory-attention",
-      "expected": "67 checks passing"
+      "expected": "67 checks passing",
+      "successMarker": "67 memory-attention checks passed"
     },
     {
       "name": "relationship intelligence, repair, and humor lifecycle",
       "command": "npm run eval:memory-relationship",
-      "expected": "82 checks passing"
+      "expected": "82 checks passing",
+      "successMarker": "82 memory-relationship checks passed"
     },
     {
       "name": "memory concurrency and crash recovery",
       "command": "npm run eval:memory-stress",
-      "expected": "12 checks passing"
+      "expected": "12 checks passing",
+      "successMarker": "12 memory-stress checks passed"
+    },
+    {
+      "name": "operational health and durable retry",
+      "command": "npm run eval:memory-hardening",
+      "expected": "23 checks passing",
+      "successMarker": "23 memory-hardening checks passed"
     }
   ]
 }

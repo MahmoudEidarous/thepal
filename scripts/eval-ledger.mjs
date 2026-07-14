@@ -30,11 +30,14 @@ const engineDoc = async (id, method = "GET") => {
     method,
     headers: { Authorization: `Bearer ${KEY}` },
   });
-  return method === "GET" ? r.json().catch(() => ({})) : r.status;
+  if (method !== "GET") return r.status;
+  const body = await r.json().catch(() => ({}));
+  return { ...body, httpStatus: r.status };
 };
 const settle = async (id) => {
   for (let i = 0; i < 50; i++) {
     const d = await engineDoc(id);
+    if (d.httpStatus === 404) return "missing";
     if (d.status === "done" || d.status === "failed") return d.status;
     await new Promise((r) => setTimeout(r, 4000));
   }
@@ -42,6 +45,13 @@ const settle = async (id) => {
 };
 const evalAgenda = async () =>
   (await fetch(`${BASE}/api/agenda?space=eval`).then((r) => r.json())).commitments ?? [];
+const until = async (fn) => {
+  for (let i = 0; i < 8; i++) {
+    if (await fn()) return true;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return fn();
+};
 
 let pass = 0;
 let fail = 0;
@@ -151,8 +161,34 @@ const cx = await post("/api/agenda/complete", {
 });
 check(cx.status === 200 && cx.data.outcome === "cancelled", "cancel closes with outcome=cancelled");
 if (cx.data.receipt?.eventId) canonicalCleanup.push(cx.data.receipt.eventId);
-const cDoc = await engineDoc(cId);
-check(cDoc.metadata?.status === "cancelled", "the document keeps status=cancelled");
+let cancelledDoc = await engineDoc(cId);
+const cancellationKept = await until(async () => {
+  cancelledDoc = await engineDoc(cId);
+  if (cancelledDoc.metadata?.status === "cancelled") return true;
+  // A failed immutable provider document is safely reborn under a new ID.
+  // Find that replacement instead of mistaking the removed failed ID for
+  // lost history.
+  const listed = await fetch(`${ENGINE}/v3/documents/list`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ containerTags: ["recall_eval"], limit: 200 }),
+  }).then((r) => r.json());
+  for (const memory of listed.memories ?? []) {
+    const text = `${memory.content ?? ""} ${memory.title ?? ""} ${memory.summary ?? ""}`;
+    if (!/x-ray results/i.test(text)) continue;
+    const fresh = await engineDoc(memory.id);
+    if (fresh.metadata?.status === "cancelled") {
+      cancelledDoc = fresh;
+      return true;
+    }
+  }
+  return false;
+});
+check(
+  cancellationKept,
+  "the document keeps status=cancelled",
+  JSON.stringify(cancelledDoc.metadata ?? null),
+);
 
 // ── completion: done stays done ─────────────────────────────────────
 const dn = await post("/api/agenda/complete", { q: "dentist appointment thursday", space: "eval" });
@@ -162,13 +198,6 @@ if (dn.data.receipt?.eventId) canonicalCleanup.push(dn.data.receipt.eventId);
 // ── neither retired state may appear in the ledger views ───────────
 // the engine's list endpoint can serve a stale snapshot for a beat
 // after a PATCH — read like a patient user, not a race
-const until = async (fn) => {
-  for (let i = 0; i < 8; i++) {
-    if (await fn()) return true;
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  return fn();
-};
 {
   let last = [];
   const ok = await until(async () => {

@@ -145,6 +145,19 @@ function pinNextWeekdayDue(envelope: Envelope | null, raw: string, today: string
   return { ...envelope, due: base.toLocaleDateString("en-CA") };
 }
 
+const FIRST_PERSON_STATE = /\bI(?:'m| am| feel| think| have|'ve)\b/i;
+const TEMPORARY_STATE =
+  /\b(anxious|stressed|overwhelmed|exhausted|burned out|falling behind|afraid|scared|sad|low|angry|frustrated|excited|hopeful|lonely)\b/i;
+
+export function pinTemporarySelfStateType(
+  envelope: Envelope | null,
+  raw: string,
+): Envelope | null {
+  if (!envelope || (envelope.type !== "fact" && envelope.type !== "event")) return envelope;
+  if (!FIRST_PERSON_STATE.test(raw) || !TEMPORARY_STATE.test(raw)) return envelope;
+  return { ...envelope, type: "impression" };
+}
+
 // a note that smells of deadlines but enveloped with zero commitments
 // is the enricher's one measured flake (~1 run in 4) — worth one
 // second opinion, and only then. The nose is wide on purpose: any
@@ -238,7 +251,10 @@ export async function enrich(
   const dropRecurring = (e: Envelope | null): Envelope | null =>
     e ? { ...e, commitments: e.commitments.filter((c) => !RECURRING.test(c.content)) } : e;
 
-  const first = pinNextWeekdayDue(dropRecurring(await raceOnce()), rawContent, today);
+  const first = pinTemporarySelfStateType(
+    pinNextWeekdayDue(dropRecurring(await raceOnce()), rawContent, today),
+    rawContent,
+  );
   // the one measured flake: a deadline-smelling note enveloped with an
   // empty commitments[] (~1 run in 4). Under the full 11-field schema
   // BOTH models sometimes drop buried deadlines; under a minimal schema
