@@ -225,7 +225,14 @@ export async function extractClaimsForEvent(
   event: MemoryEvent,
   options: { currentBeliefs?: Belief[] } = {},
 ): Promise<MemoryClaim[]> {
-  if (event.tombstonedAt || event.kind === "deletion" || event.kind === "consent") return [];
+  if (
+    event.tombstonedAt ||
+    event.kind === "deletion" ||
+    event.kind === "consent" ||
+    event.payload.prospective
+  ) {
+    return [];
+  }
   const current = (options.currentBeliefs ?? [])
     .slice(0, 20)
     .map(

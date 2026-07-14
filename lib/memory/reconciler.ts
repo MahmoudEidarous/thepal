@@ -1,5 +1,8 @@
 import { CaptureEvidencePayloadSchema } from "./contracts";
+import type { MemoryEvent } from "./contracts";
 import { findCanonicalSupermemoryMirror, processCaptureEvent } from "./capture-processor";
+import { createCanonicalProspective } from "./prospective-writer";
+import { processStateJob } from "./state-reconciler";
 import {
   getMemoryEventLedger,
   type MemoryEventLedger,
@@ -19,6 +22,53 @@ type DeferredProcessing = {
 };
 
 export type ProcessingOutcome = SuccessfulProcessing | DeferredProcessing;
+
+async function ensureDerivedProspective(
+  ledger: MemoryEventLedger,
+  event: MemoryEvent,
+  externalId: string,
+  prospective?: { topic: string; action: string; firePolicy: "once" } | null,
+) {
+  if (event.payload.prospective) return;
+  // Stored documents and tool output are evidence, never authority to create
+  // a future interruption. Only the user's own direct utterance can mint a
+  // prospective memory during ordinary capture.
+  if (event.source.actor !== "user" || event.source.trust !== "user_direct") return;
+  let candidate = prospective ?? null;
+  if (!candidate) {
+    const { supermemory } = await import("../supermemory");
+    const document = (await supermemory.documents.get(externalId).catch(() => null)) as {
+      metadata?: Record<string, unknown> | null;
+    } | null;
+    const metadata = document?.metadata ?? {};
+    if (
+      metadata.triggerMode === "context" &&
+      typeof metadata.triggerTopic === "string" &&
+      typeof metadata.triggerAction === "string"
+    ) {
+      candidate = {
+        topic: metadata.triggerTopic,
+        action: metadata.triggerAction,
+        firePolicy: "once",
+      };
+    }
+  }
+  if (!candidate) return;
+  const derived = createCanonicalProspective(
+    {
+      topic: candidate.topic,
+      action: candidate.action,
+      space: event.space,
+      userId: event.userId,
+      source: event.payload.legacySource,
+      sourceEventId: event.id,
+      providerExternalId: externalId,
+      idempotencyKey: `prospective-from:${event.id}`,
+    },
+    ledger,
+  );
+  await processStateJob(derived.stateJob.id, { ledger });
+}
 
 async function processClaimedJob(
   ledger: MemoryEventLedger,
@@ -57,6 +107,7 @@ async function processClaimedJob(
   try {
     const knownMirror = ledger.getMirror(event.id);
     if (knownMirror) {
+      await ensureDerivedProspective(ledger, event, knownMirror.externalId);
       ledger.markJobSucceeded(job.id);
       return { state: "already_succeeded", externalId: knownMirror.externalId };
     }
@@ -73,6 +124,7 @@ async function processClaimedJob(
           externalId,
           payloadHash: event.payloadHash,
         });
+        await ensureDerivedProspective(ledger, event, externalId);
         ledger.markJobSucceeded(job.id);
         return { state: "already_succeeded", externalId };
       }
@@ -109,6 +161,12 @@ async function processClaimedJob(
       externalId: result.externalId,
       payloadHash: event.payloadHash,
     });
+    await ensureDerivedProspective(
+      ledger,
+      event,
+      result.externalId,
+      result.response.envelope?.prospective ?? null,
+    );
     ledger.markJobSucceeded(job.id);
     return { state: "succeeded", externalId: result.externalId, response: result.response };
   } catch (error) {

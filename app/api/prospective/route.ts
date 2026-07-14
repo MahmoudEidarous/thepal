@@ -45,6 +45,9 @@ export async function POST(request: Request) {
         topic,
         action,
         source: typeof body.source === "string" ? body.source : "recall-app",
+        idempotencyKey:
+          request.headers.get("Idempotency-Key") ??
+          (typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined),
       });
       invalidateCorpus(space);
       return Response.json(result);
@@ -68,6 +71,9 @@ export async function POST(request: Request) {
         operation: operation as "fire" | "resolve" | "cancel" | "snooze",
         until: typeof body.until === "string" ? body.until : undefined,
         reason: typeof body.reason === "string" ? body.reason : undefined,
+        idempotencyKey:
+          request.headers.get("Idempotency-Key") ??
+          (typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined),
       });
       if (!result) {
         return Response.json({ error: "no open prospective memory matches that" }, { status: 404 });

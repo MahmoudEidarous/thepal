@@ -50,6 +50,7 @@ const settle = async (id) => {
 let pass = 0;
 let fail = 0;
 const cleanup = [];
+const run = `run-${Date.now().toString(36)}`;
 const check = (ok, label, detail = "") => {
   if (ok) {
     pass += 1;
@@ -63,14 +64,18 @@ const check = (ok, label, detail = "") => {
 try {
   const exact = await post({
     operation: "create",
-    topic: "prospective-eval Vienna",
+    topic: `${run} Aster summit`,
     action: "ask about pricing",
     source: "eval-prospective",
   });
   const exactId = exact.data.trigger?.id;
-  if (exactId) cleanup.push(exactId);
+  const exactProviderId = exact.data.trigger?.providerExternalId;
+  const exactCleanup = exactId
+    ? { triggerId: exactId, providerId: exactProviderId, eventIds: [exactId] }
+    : null;
+  if (exactCleanup) cleanup.push(exactCleanup);
   check(exact.status === 200 && !!exactId, "creates a context-triggered commitment");
-  check((await settle(exactId)) === "done", "new trigger settles before lifecycle mutation");
+  check(!!exactProviderId && (await settle(exactProviderId)) === "done", "new trigger settles before lifecycle mutation");
 
   const agenda = await get("/api/agenda?space=eval");
   check(
@@ -87,7 +92,7 @@ try {
 
   const match = await post({
     operation: "match",
-    context: "prospective-eval Vienna came up on the call",
+    context: `${run} Aster summit came up on the call`,
     seen: [],
   });
   check(
@@ -98,7 +103,7 @@ try {
 
   const cooled = await post({
     operation: "match",
-    context: "prospective-eval Vienna came up again",
+    context: `${run} Aster summit came up again`,
     seen: [exactId],
   });
   check(cooled.data.match === null, "per-session seen IDs prevent repeated nudges");
@@ -108,11 +113,14 @@ try {
     id: exactId,
     reason: "exact topic returned",
   });
+  if (exactCleanup && fired.data.trigger?.lastEventId) {
+    exactCleanup.eventIds.push(fired.data.trigger.lastEventId);
+  }
   check(fired.status === 200 && fired.data.operation === "fire", "fires once");
 
   const after = await post({
     operation: "match",
-    context: "prospective-eval Vienna once more",
+    context: `${run} Aster summit once more`,
     seen: [],
   });
   check(after.data.match === null, "consumed trigger cannot fire twice");
@@ -123,16 +131,20 @@ try {
 
   const fuzzy = await post({
     operation: "create",
-    topic: "prospective-eval Leipzig pilot pricing",
+    topic: `${run} Kestrel pilot pricing`,
     action: "ask whether the quote changed",
     source: "eval-prospective",
   });
   const fuzzyId = fuzzy.data.trigger?.id;
-  if (fuzzyId) cleanup.push(fuzzyId);
-  check((await settle(fuzzyId)) === "done", "second trigger settles");
+  const fuzzyProviderId = fuzzy.data.trigger?.providerExternalId;
+  const fuzzyCleanup = fuzzyId
+    ? { triggerId: fuzzyId, providerId: fuzzyProviderId, eventIds: [fuzzyId] }
+    : null;
+  if (fuzzyCleanup) cleanup.push(fuzzyCleanup);
+  check(!!fuzzyProviderId && (await settle(fuzzyProviderId)) === "done", "second trigger settles");
   const fuzzyMatch = await post({
     operation: "match",
-    context: "Pricing for the prospective-eval Leipzig customer pilot changed",
+    context: `Pricing for the ${run} Kestrel customer pilot changed`,
     seen: [],
   });
   check(
@@ -142,15 +154,34 @@ try {
   );
 
   const snoozed = await post({ operation: "snooze", id: fuzzyId });
+  if (fuzzyCleanup && snoozed.data.trigger?.lastEventId) {
+    fuzzyCleanup.eventIds.push(snoozed.data.trigger.lastEventId);
+  }
   check(snoozed.status === 200 && snoozed.data.operation === "snooze", "snoozes explicitly");
   const quiet = await post({
     operation: "match",
-    context: "prospective-eval Leipzig pilot pricing",
+    context: `${run} Kestrel pilot pricing`,
     seen: [],
   });
   check(quiet.data.match === null, "snoozed topic stays quiet");
 } finally {
-  await Promise.all(cleanup.map(remove));
+  for (const item of cleanup) {
+    for (const eventId of [...new Set(item.eventIds)].reverse()) {
+      const preview = await fetch(`${BASE}/api/memory/deletions/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventId }),
+      }).then((response) => response.json().catch(() => null));
+      if (preview?.token) {
+        await fetch(`${BASE}/api/memory/deletions/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: preview.token }),
+        }).catch(() => null);
+      }
+    }
+    if (item.providerId) await remove(item.providerId);
+  }
 }
 
 console.log(`\n${pass}/${pass + fail} prospective checks passed`);

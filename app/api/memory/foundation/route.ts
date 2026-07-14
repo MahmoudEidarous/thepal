@@ -23,6 +23,7 @@ function publicStats() {
     beliefs: stats.beliefs,
     threads: stats.threads,
     threadTransitions: stats.threadTransitions,
+    prospective: stats.prospective,
     mirrors: stats.mirrors,
   };
 }

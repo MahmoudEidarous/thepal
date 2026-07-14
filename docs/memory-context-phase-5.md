@@ -4,6 +4,9 @@ Phase 5 adds the **bounded context compiler**. It is the read-side layer that
 makes the existing memory systems collaborate on each turn without flattening
 them into one untyped prompt.
 
+> Current note: Phase 6 extends this contract to `context-v2` with a bounded
+> `continuityViews` slot. The Phase 5 description below records the v1 boundary.
+
 The invariant is now:
 
 ```text

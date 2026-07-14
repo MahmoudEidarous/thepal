@@ -12,6 +12,7 @@ import type {
   MemoryReceipt,
   MemorySource,
   MemorySpace,
+  ProspectiveMemory,
   Sensitivity,
   ThreadTransition,
 } from "./contracts";
@@ -37,7 +38,7 @@ function sqliteConstructor(): SqliteModule["DatabaseSync"] {
 }
 
 const CONTRACT_VERSION = 1 as const;
-const SCHEMA_VERSION = 3 as const;
+const SCHEMA_VERSION = 4 as const;
 const MAX_JOB_ATTEMPTS = 5;
 const PROCESSING_JOB_KIND = "enrich_and_index" as const;
 
@@ -109,6 +110,7 @@ export type DeletionPreview = {
   claims: number;
   affectedBeliefs: string[];
   affectedThreads: string[];
+  affectedProspective: string[];
   mirrored: boolean;
 };
 
@@ -148,6 +150,7 @@ export type LedgerStats = {
   beliefs: number;
   threads: number;
   threadTransitions: number;
+  prospective: number;
   mirrors: number;
 };
 
@@ -347,6 +350,32 @@ const MIGRATION_3 = `
     ON memory_thread_transitions(thread_id, occurred_at, id);
 `;
 
+const MIGRATION_4 = `
+  CREATE TABLE IF NOT EXISTS memory_prospective_triggers (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    create_event_id TEXT NOT NULL REFERENCES memory_events(id) ON DELETE CASCADE,
+    last_event_id TEXT NOT NULL REFERENCES memory_events(id),
+    topic TEXT NOT NULL,
+    action TEXT NOT NULL,
+    fire_policy TEXT NOT NULL CHECK (fire_policy = 'once'),
+    status TEXT NOT NULL CHECK (status IN ('open','done','cancelled')),
+    outcome TEXT CHECK (outcome IS NULL OR outcome IN ('fired','resolved','cancelled')),
+    snoozed_until TEXT,
+    created_at TEXT NOT NULL,
+    fired_at TEXT,
+    provider_external_id TEXT,
+    evidence_event_ids_json TEXT NOT NULL CHECK (json_valid(evidence_event_ids_json)),
+    projector_version TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, space, create_event_id)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_prospective_open
+    ON memory_prospective_triggers(user_id, space, status, snoozed_until, created_at);
+`;
+
 function text(row: SqlRow, key: string): string {
   const value = row[key];
   if (typeof value !== "string") throw new Error(`memory ledger: ${key} is not text`);
@@ -522,6 +551,29 @@ function threadTransitionFromRow(row: SqlRow): ThreadTransition {
   };
 }
 
+function prospectiveFromRow(row: SqlRow): ProspectiveMemory {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    space: text(row, "space") as MemorySpace,
+    createEventId: text(row, "create_event_id"),
+    lastEventId: text(row, "last_event_id"),
+    topic: text(row, "topic"),
+    action: text(row, "action"),
+    firePolicy: "once",
+    status: text(row, "status") as ProspectiveMemory["status"],
+    outcome: nullableText(row, "outcome") as ProspectiveMemory["outcome"],
+    snoozedUntil: nullableText(row, "snoozed_until"),
+    createdAt: text(row, "created_at"),
+    firedAt: nullableText(row, "fired_at"),
+    providerExternalId: nullableText(row, "provider_external_id"),
+    evidenceEventIds: JSON.parse(
+      text(row, "evidence_event_ids_json"),
+    ) as ProspectiveMemory["evidenceEventIds"],
+    projectorVersion: text(row, "projector_version"),
+  };
+}
+
 function mirrorFromRow(row: SqlRow): MemoryMirror {
   return {
     eventId: text(row, "event_id"),
@@ -614,6 +666,23 @@ export class MemoryEventLedger {
           )
           .run(3, "living threads and open-loop projections", now);
         this.database.exec("PRAGMA user_version = 3");
+        this.database.exec("COMMIT");
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    }
+    if (current < 4) {
+      const now = new Date().toISOString();
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(MIGRATION_4);
+        this.database
+          .prepare(
+            "INSERT OR IGNORE INTO memory_schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+          )
+          .run(4, "canonical prospective-memory projection", now);
+        this.database.exec("PRAGMA user_version = 4");
         this.database.exec("COMMIT");
       } catch (error) {
         this.database.exec("ROLLBACK");
@@ -1450,6 +1519,88 @@ export class MemoryEventLedger {
     return rows.map(threadTransitionFromRow);
   }
 
+  replaceProspectiveProjection(
+    userId: string,
+    space: MemorySpace,
+    triggers: ProspectiveMemory[],
+    now = new Date().toISOString(),
+  ) {
+    if (triggers.some((trigger) => trigger.userId !== userId || trigger.space !== space)) {
+      throw new Error("memory ledger: prospective projection crossed a user or memory space");
+    }
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database
+        .prepare("DELETE FROM memory_prospective_triggers WHERE user_id = ? AND space = ?")
+        .run(userId, space);
+      const insert = this.database.prepare(`
+        INSERT INTO memory_prospective_triggers(
+          id, user_id, space, create_event_id, last_event_id,
+          topic, action, fire_policy, status, outcome, snoozed_until,
+          created_at, fired_at, provider_external_id,
+          evidence_event_ids_json, projector_version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'once', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const trigger of triggers) {
+        insert.run(
+          trigger.id,
+          userId,
+          space,
+          trigger.createEventId,
+          trigger.lastEventId,
+          trigger.topic,
+          trigger.action,
+          trigger.status,
+          trigger.outcome,
+          trigger.snoozedUntil,
+          trigger.createdAt,
+          trigger.firedAt,
+          trigger.providerExternalId,
+          JSON.stringify(trigger.evidenceEventIds),
+          trigger.projectorVersion,
+          now,
+        );
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listProspective(options: {
+    userId?: string;
+    space: MemorySpace;
+    id?: string;
+    includeClosed?: boolean;
+    includeSnoozed?: boolean;
+    at?: string;
+    limit?: number;
+  }): ProspectiveMemory[] {
+    const conditions = ["user_id = ?", "space = ?"];
+    const values: Array<string | number> = [options.userId ?? "local-user", options.space];
+    if (options.id) {
+      conditions.push("id = ?");
+      values.push(options.id);
+    }
+    if (!options.includeClosed) conditions.push("status = 'open'");
+    if (!options.includeSnoozed) {
+      conditions.push("(snoozed_until IS NULL OR snoozed_until <= ?)");
+      values.push(options.at ?? new Date().toISOString());
+    }
+    const limit = Math.max(1, Math.min(5_000, Math.floor(options.limit ?? 500)));
+    values.push(limit);
+    const rows = this.database
+      .prepare(`
+        SELECT * FROM memory_prospective_triggers
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY created_at, id
+        LIMIT ?
+      `)
+      .all(...values) as SqlRow[];
+    return rows.map(prospectiveFromRow);
+  }
+
   listClaimRelations(userId: string, space: MemorySpace): StoredClaimRelation[] {
     const rows = this.database
       .prepare(`
@@ -1494,6 +1645,15 @@ export class MemoryEventLedger {
     })
       .filter((thread) => thread.evidenceEventIds.includes(eventId))
       .map((thread) => thread.id);
+    const affectedProspective = this.listProspective({
+      userId: event.userId,
+      space: event.space,
+      includeClosed: true,
+      includeSnoozed: true,
+      limit: 5_000,
+    })
+      .filter((trigger) => trigger.evidenceEventIds.includes(eventId))
+      .map((trigger) => trigger.id);
     const token = randomUUID();
     const issuedAt = options.now ?? new Date().toISOString();
     const expiresAt = new Date(
@@ -1512,6 +1672,7 @@ export class MemoryEventLedger {
       claims: claims.length,
       affectedBeliefs,
       affectedThreads,
+      affectedProspective,
       mirrored: this.getMirror(eventId)?.status === "synced",
     };
   }
@@ -1564,6 +1725,9 @@ export class MemoryEventLedger {
       // the immediate rebuild finishes.
       this.database
         .prepare("DELETE FROM memory_threads WHERE user_id = ? AND space = ?")
+        .run(event.userId, event.space);
+      this.database
+        .prepare("DELETE FROM memory_prospective_triggers WHERE user_id = ? AND space = ?")
         .run(event.userId, event.space);
       this.database
         .prepare(`
@@ -1652,6 +1816,7 @@ export class MemoryEventLedger {
       beliefs: count("memory_beliefs"),
       threads: count("memory_threads"),
       threadTransitions: count("memory_thread_transitions"),
+      prospective: count("memory_prospective_triggers"),
       mirrors: count("memory_mirrors"),
     };
   }

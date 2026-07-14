@@ -84,7 +84,7 @@ function thread(title) {
 }
 
 try {
-  check(ledger.stats().schemaVersion === 3, "schema migration 3 is active");
+  check(ledger.stats().schemaVersion === 4, "schema migration 4 is active");
   const upgradePath = join(directory, "upgrade-from-v2.sqlite");
   const seededUpgrade = new MemoryEventLedger({ databasePath: upgradePath });
   seededUpgrade.close();
@@ -92,12 +92,13 @@ try {
   rawUpgrade.exec(`
     DROP TABLE memory_thread_transitions;
     DROP TABLE memory_threads;
-    DELETE FROM memory_schema_migrations WHERE version = 3;
+    DROP TABLE memory_prospective_triggers;
+    DELETE FROM memory_schema_migrations WHERE version >= 3;
     PRAGMA user_version = 2;
   `);
   rawUpgrade.close();
   const upgraded = new MemoryEventLedger({ databasePath: upgradePath });
-  check(upgraded.stats().schemaVersion === 3, "an existing schema-v2 ledger upgrades in place");
+  check(upgraded.stats().schemaVersion === 4, "an existing schema-v2 ledger upgrades in place");
   check(upgraded.stats().integrity === "ok", "the v2-to-v3 migration preserves SQLite integrity");
   upgraded.close();
 

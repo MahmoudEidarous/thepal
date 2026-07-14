@@ -1,6 +1,10 @@
 import { fusedRecall, type Hit } from "../fusion";
 import { openCommitments, pinned, type OpenCommitment } from "../ledger";
-import { matchProspectiveTrigger, type ProspectiveMatch } from "../prospective";
+import {
+  matchProspectiveCandidates,
+  matchProspectiveTrigger,
+  type ProspectiveMatch,
+} from "../prospective";
 import { spaceTag } from "../supermemory";
 import {
   compileContext,
@@ -10,6 +14,8 @@ import {
 import type { MemoryEvent } from "./contracts";
 import { getMemoryEventLedger, type MemoryEventLedger } from "./event-ledger";
 import { rebuildThreads } from "./thread-engine";
+import { rebuildProspective } from "./prospective-projector";
+import { continuityContextViews } from "./continuity-projectors";
 
 export type ContextCompilerDependencies = {
   ledger?: MemoryEventLedger;
@@ -33,6 +39,7 @@ export async function compileMemoryContext(
   const at = input.at ?? new Date().toISOString();
   const tag = spaceTag(input.space);
   rebuildThreads(ledger, userId, input.space, { asOf: at });
+  rebuildProspective(ledger, userId, input.space);
   const events = ledger.listActiveEvents(userId, input.space);
   const claimEvidence = ledger.listClaimEvidence(userId, input.space);
   const beliefs = [
@@ -54,6 +61,9 @@ export async function compileMemoryContext(
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 2_000);
+  const continuityViews = query
+    ? continuityContextViews(ledger, userId, input.space, query, at)
+    : [];
   const [pins, commitments, prospective, rawHistory] = await Promise.all([
     safe("pinned memory", [] as string[], () => (dependencies.getPins ?? pinned)(tag)),
     input.includeObligations === false
@@ -63,11 +73,17 @@ export async function compileMemoryContext(
     input.includeProspective === false || !query
       ? Promise.resolve([] as ProspectiveMatch[])
       : safe("prospective memory", [] as ProspectiveMatch[], async () => {
-          const match = await (dependencies.matchProspective ?? matchProspectiveTrigger)({
-            tag,
-            context: query,
-            seen: input.seenProspective ?? [],
-          });
+          const match = dependencies.matchProspective
+            ? await dependencies.matchProspective({
+                tag,
+                context: query,
+                seen: input.seenProspective ?? [],
+              })
+            : matchProspectiveCandidates(
+                ledger.listProspective({ userId, space: input.space }),
+                query,
+                input.seenProspective ?? [],
+              );
           return match ? [match] : [];
         }),
     input.includeHistory === false || query.length < 3
@@ -105,6 +121,7 @@ export async function compileMemoryContext(
       history,
       events,
       claimEvidence,
+      continuityViews,
       degradedSources,
     },
   );

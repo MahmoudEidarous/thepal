@@ -92,7 +92,7 @@ function trustRank(evidence: ClaimEvidence) {
   }
 }
 
-function canProject(evidence: ClaimEvidence) {
+export function canProjectClaimEvidence(evidence: ClaimEvidence) {
   const { claim } = evidence;
   if (evidence.trust === "external_content") return false;
   if (
@@ -150,7 +150,7 @@ export function projectBeliefs(
   const excludedClaimIds: string[] = [];
   const eligible = allEvidence.filter((evidence) => {
     if (evidence.recordedAt > asOf) return false;
-    const accepted = canProject(evidence);
+    const accepted = canProjectClaimEvidence(evidence);
     if (!accepted) excludedClaimIds.push(evidence.claim.id);
     return accepted;
   });

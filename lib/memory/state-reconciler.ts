@@ -1,6 +1,7 @@
 import { rebuildBeliefs } from "./belief-projector";
 import { extractClaimsForEvent } from "./extractor";
 import { rebuildThreads } from "./thread-engine";
+import { rebuildProspective } from "./prospective-projector";
 import {
   getMemoryEventLedger,
   type MemoryEventLedger,
@@ -19,6 +20,7 @@ export type StateProcessingOutcome = {
   claims?: number;
   beliefs?: number;
   threads?: number;
+  prospective?: number;
   excludedClaims?: number;
   error?: string;
 };
@@ -103,6 +105,7 @@ async function processClaimedStateJob(
     if (event.tombstonedAt) {
       const projection = rebuildBeliefs(ledger, event.userId, event.space, { asOf });
       const threadProjection = rebuildThreads(ledger, event.userId, event.space, { asOf });
+      const prospectiveProjection = rebuildProspective(ledger, event.userId, event.space);
       ledger.markStateJobSucceeded(job.id);
       return {
         state: "succeeded",
@@ -110,6 +113,7 @@ async function processClaimedStateJob(
         claims: 0,
         beliefs: projection.beliefs.length,
         threads: threadProjection.threads.length,
+        prospective: prospectiveProjection.triggers.length,
         excludedClaims: projection.excludedClaimIds.length,
       };
     }
@@ -127,6 +131,7 @@ async function processClaimedStateJob(
     ledger.replaceClaimsForEvent(event.id, claims);
     const projection = rebuildBeliefs(ledger, event.userId, event.space, { asOf });
     const threadProjection = rebuildThreads(ledger, event.userId, event.space, { asOf });
+    const prospectiveProjection = rebuildProspective(ledger, event.userId, event.space);
     ledger.markStateJobSucceeded(job.id);
     return {
       state: "succeeded",
@@ -134,6 +139,7 @@ async function processClaimedStateJob(
       claims: claims.length,
       beliefs: projection.beliefs.length,
       threads: threadProjection.threads.length,
+      prospective: prospectiveProjection.triggers.length,
       excludedClaims: projection.excludedClaimIds.length,
     };
   } catch (error) {

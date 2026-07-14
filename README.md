@@ -41,9 +41,16 @@ Memory engines are commodities; **judgment and initiative are the product**. Sup
 
 Every agent tool is a *client tool*: it executes in your browser against local API routes. ElevenLabs carries audio and tool calls; **your memories are stored on your machine**. Model inference (voice LLM, enrichment, extraction) uses hosted models today — every one of them is swappable, point them at local models and the loop is airgapped.
 
+The durable memory source of truth is now the local SQLite evidence ledger in
+`.recall/memory.sqlite`. Claims, temporal beliefs, life threads, prospective
+memory, dossiers, emotional arcs, routines, and week/month views are derived
+from that evidence. Supermemory Local remains the semantic index, relation
+engine, and compatibility mirror; its summaries and metadata never outrank the
+canonical ledger. See [Phase 6 human continuity](docs/memory-continuity-phase-6.md).
+
 ## Run it
 
-You need [Supermemory Local](https://supermemory.ai) (`supermemory-server`, port 6767), an ElevenLabs API key, an OpenRouter key, and Node 20+.
+You need [Supermemory Local](https://supermemory.ai) (`supermemory-server`, port 6767), an ElevenLabs API key, an OpenRouter key, and Node 22.5+.
 
 ```bash
 cp env.example .env.local             # fill in your keys

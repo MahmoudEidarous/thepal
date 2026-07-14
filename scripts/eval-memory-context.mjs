@@ -232,7 +232,7 @@ const input = {
 const context = compileContext(input, sources);
 const replay = compileContext(input, sources);
 
-check(context.contractVersion === 1 && context.compilerVersion === "context-v1", "context contract and compiler versions are explicit");
+check(context.contractVersion === 1 && context.compilerVersion === "context-v2", "context contract and compiler versions are explicit");
 check(context.space === "eval" && context.compiledAt === AT, "space and compilation time remain scoped and inspectable");
 check(context.working.query === input.query, "the current turn is preserved as working memory");
 check(context.working.recentTurns.length === 2 && context.working.selectedMemory === "Vienna planning", "recent turns and selected UI memory compile together");
@@ -263,7 +263,7 @@ check(context.agentText.includes("not permission to interrupt"), "compiled threa
 check(context.degradedSources.length === 1, "degraded provider sources are deduplicated and disclosed");
 check(context.budget.usedTokens <= context.budget.maxTokens, "ordinary compilation respects its token ceiling");
 check(context.budget.omittedItems >= 0, "budget accounting exposes omitted candidates");
-check([...context.safety, ...context.obligations, ...context.activeThreads, ...context.currentBeliefs, ...context.historicalEvidence, ...context.prospective, ...context.uncertainty].every((item) => item.whyIncluded && item.allowedUse), "every compiled item explains inclusion and assertion policy");
+check([...context.safety, ...context.obligations, ...context.activeThreads, ...context.continuityViews, ...context.currentBeliefs, ...context.historicalEvidence, ...context.prospective, ...context.uncertainty].every((item) => item.whyIncluded && item.allowedUse), "every compiled item explains inclusion and assertion policy");
 assert.deepEqual(context, replay);
 check(true, "identical inputs replay to byte-identical context");
 

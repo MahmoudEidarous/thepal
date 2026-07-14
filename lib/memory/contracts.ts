@@ -80,6 +80,15 @@ export const THREAD_COMMITMENT_STATUSES = [
   "cancelled",
   "superseded",
 ] as const;
+export const PROSPECTIVE_OPERATIONS = [
+  "create",
+  "fire",
+  "resolve",
+  "cancel",
+  "snooze",
+] as const;
+export const PROSPECTIVE_STATUSES = ["open", "done", "cancelled"] as const;
+export const PROSPECTIVE_OUTCOMES = ["fired", "resolved", "cancelled"] as const;
 
 const InstantSchema = z.string().refine((value) => Number.isFinite(Date.parse(value)), {
   message: "expected an ISO-compatible instant",
@@ -101,6 +110,9 @@ export const LifeThreadKindSchema = z.enum(LIFE_THREAD_KINDS);
 export const LifeThreadStatusSchema = z.enum(LIFE_THREAD_STATUSES);
 export const ThreadTransitionKindSchema = z.enum(THREAD_TRANSITION_KINDS);
 export const ThreadCommitmentStatusSchema = z.enum(THREAD_COMMITMENT_STATUSES);
+export const ProspectiveOperationSchema = z.enum(PROSPECTIVE_OPERATIONS);
+export const ProspectiveStatusSchema = z.enum(PROSPECTIVE_STATUSES);
+export const ProspectiveOutcomeSchema = z.enum(PROSPECTIVE_OUTCOMES);
 
 export const TimeRangeSchema = z
   .object({
@@ -149,6 +161,18 @@ export const CorrectionRequestSchema = z.object({
   idempotencyKey: z.string().trim().min(1).max(200).optional(),
 });
 
+export const ProspectiveEvidenceSchema = z.object({
+  operation: ProspectiveOperationSchema,
+  triggerId: z.string().uuid().nullable().default(null),
+  topic: z.string().trim().min(1).max(120).nullable().default(null),
+  action: z.string().trim().min(1).max(300).nullable().default(null),
+  firePolicy: z.literal("once").default("once"),
+  until: InstantSchema.nullable().default(null),
+  reason: z.string().trim().min(1).max(500).nullable().default(null),
+  sourceEventId: z.string().uuid().nullable().default(null),
+  providerExternalId: z.string().trim().min(1).max(500).nullable().default(null),
+});
+
 export const CaptureEvidencePayloadSchema = z.object({
   content: z.string().min(1).max(256_000),
   redacted: z.boolean(),
@@ -157,6 +181,26 @@ export const CaptureEvidencePayloadSchema = z.object({
     kind: RequestedMemoryKindSchema,
     due: z.string().max(64).nullable(),
   }),
+  prospective: ProspectiveEvidenceSchema.optional(),
+});
+
+export const ProspectiveMemorySchema = z.object({
+  id: z.string().uuid(),
+  userId: z.string().min(1).max(120),
+  space: MemorySpaceSchema,
+  createEventId: z.string().uuid(),
+  lastEventId: z.string().uuid(),
+  topic: z.string().min(1).max(120),
+  action: z.string().min(1).max(300),
+  firePolicy: z.literal("once"),
+  status: ProspectiveStatusSchema,
+  outcome: ProspectiveOutcomeSchema.nullable(),
+  snoozedUntil: InstantSchema.nullable(),
+  createdAt: InstantSchema,
+  firedAt: InstantSchema.nullable(),
+  providerExternalId: z.string().min(1).max(500).nullable(),
+  evidenceEventIds: z.array(z.string().uuid()).min(1).max(1_000),
+  projectorVersion: z.string().min(1).max(120),
 });
 
 export const MemorySourceSchema = z.object({
@@ -306,6 +350,9 @@ export type LifeThreadKind = z.infer<typeof LifeThreadKindSchema>;
 export type LifeThreadStatus = z.infer<typeof LifeThreadStatusSchema>;
 export type ThreadTransitionKind = z.infer<typeof ThreadTransitionKindSchema>;
 export type ThreadCommitmentStatus = z.infer<typeof ThreadCommitmentStatusSchema>;
+export type ProspectiveOperation = z.infer<typeof ProspectiveOperationSchema>;
+export type ProspectiveStatus = z.infer<typeof ProspectiveStatusSchema>;
+export type ProspectiveOutcome = z.infer<typeof ProspectiveOutcomeSchema>;
 export type TimeRange = z.infer<typeof TimeRangeSchema>;
 export type EntityRef = z.infer<typeof EntityRefSchema>;
 export type TypedValue = z.infer<typeof TypedValueSchema>;
@@ -318,3 +365,5 @@ export type ThreadExpectedNext = z.infer<typeof ThreadExpectedNextSchema>;
 export type ThreadResolution = z.infer<typeof ThreadResolutionSchema>;
 export type LifeThread = z.infer<typeof LifeThreadSchema>;
 export type ThreadTransition = z.infer<typeof ThreadTransitionSchema>;
+export type ProspectiveEvidence = z.infer<typeof ProspectiveEvidenceSchema>;
+export type ProspectiveMemory = z.infer<typeof ProspectiveMemorySchema>;
