@@ -87,6 +87,7 @@ function VoiceCore({
   selectedMemory?: string | null;
 }) {
   const [lines, setLines] = useState<Line[]>([]);
+  const linesRef = useRef<Line[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
   const [pending, setPending] = useState<PendingForget | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -192,6 +193,7 @@ function VoiceCore({
   // can never nag twice while its lifecycle update settles.
   const prospectiveEnabledRef = useRef(false);
   const prospectiveSeenRef = useRef(new Set<string>());
+  const contextTurnRef = useRef(0);
 
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
@@ -252,28 +254,25 @@ function VoiceCore({
         // the user's voice freezes the constellation where the audio
         // actually is — queued chapters must not light over them
         clearStoryFlips();
-        if (prospectiveEnabledRef.current && message.trim()) {
-          void postJson("/api/prospective", {
-            operation: "match",
-            context: message,
-            seen: [...prospectiveSeenRef.current],
+        if (message.trim()) {
+          const turn = ++contextTurnRef.current;
+          const recentTurns = [...linesRef.current.slice(-7), { role: "user" as const, text: message }];
+          void postJson("/api/context/compile", {
+            query: message,
+            recentTurns,
+            selectedMemory,
+            seenProspective: [...prospectiveSeenRef.current],
+            includeProspective: prospectiveEnabledRef.current,
+            maxTokens: 1_400,
           })
             .then((data) => {
-              const match = data.match as
-                | {
-                    id: string;
-                    topic: string;
-                    action: string;
-                    reason: string;
-                    match: "exact" | "fuzzy";
-                  }
-                | null;
-              if (!match?.id || prospectiveSeenRef.current.has(match.id)) return;
-              prospectiveSeenRef.current.add(match.id);
+              if (turn !== contextTurnRef.current) return;
+              const match = (data.prospective ?? [])[0] as { id?: string } | undefined;
+              if (match?.id) prospectiveSeenRef.current.add(match.id);
               try {
-                conversationRef.current.sendContextualUpdate(
-                  `PROSPECTIVE MEMORY MATCHED (${match.match}): id=${match.id}; topic="${match.topic}"; reminder="${match.action}"; reason=${match.reason}. Before or at the first natural beat of this reply, call manage_prospective_memory with this id and action=fire. Then deliver the reminder ONCE in one natural line, including that the user asked you to bring it up next time this topic appeared. Do not describe matching machinery.`,
-                );
+                if (typeof data.agentText === "string") {
+                  conversationRef.current.sendContextualUpdate(data.agentText);
+                }
               } catch {}
             })
             .catch(() => {});
@@ -281,7 +280,9 @@ function VoiceCore({
       } else {
         lastAgentLine.current = message;
       }
-      setLines((l) => [...l.slice(-30), { role, text: message }]);
+      const nextLines = [...linesRef.current.slice(-30), { role, text: message }];
+      linesRef.current = nextLines;
+      setLines(nextLines);
     },
     onError: (message) => setError(typeof message === "string" ? message : "Connection error"),
   });
@@ -423,6 +424,8 @@ function VoiceCore({
     }
     setError(null);
     setLines([]);
+    linesRef.current = [];
+    contextTurnRef.current = 0;
     try {
       // agenda + boundaries ride in with the session — the agent knows
       // what you owe and what it must never suggest, before you speak.
@@ -583,39 +586,34 @@ function VoiceCore({
         clientTools: {
           search_memories: ({ query }: { query: string }) =>
             track("searching memories", async () => {
-              const data = await postJson("/api/recall", { q: query, limit: 6 });
-              const compiled = (data.beliefs ?? []).map(
-                (belief: {
-                  text: string;
-                  status: "current" | "conflicting";
-                  confidence: string;
-                  systemTime?: { start?: string };
-                }) => ({
-                  text: `${belief.status === "current" ? "CURRENT TRUTH" : "UNRESOLVED CONFLICT"}: ${belief.text} [${belief.confidence}]`,
-                  told: belief.systemTime?.start ?? null,
-                }),
-              );
-              // told-timestamps ride along so the agent can arbitrate
-              // conflicts — the latest telling is the current truth
-              const semantic = (data.results ?? [])
-                .map((r: { memory?: string; chunk?: string; createdAt?: string | null }) => {
-                  const text = r.memory ?? r.chunk;
-                  return text ? { text, told: r.createdAt ?? null } : null;
-                })
-                .filter(Boolean) as Array<{ text: string; told: string | null }>;
-              // Compiled current state leads; semantic evidence follows so the
-              // agent can explain history without treating an old hit as now.
-              const raw = [...compiled, ...semantic];
+              const data = await postJson("/api/context/compile", {
+                query,
+                recentTurns: linesRef.current.slice(-8),
+                selectedMemory,
+                includeProspective: false,
+                maxTokens: 1_600,
+              });
+              type CompiledItem = {
+                text: string;
+                confidence?: string | null;
+                metadata?: { toldAt?: string | null };
+              };
+              const state = [
+                ...(data.currentBeliefs ?? []),
+                ...(data.uncertainty ?? []),
+                ...(data.activeThreads ?? []),
+              ] as CompiledItem[];
+              const history = (data.historicalEvidence ?? []) as CompiledItem[];
+              const raw = [
+                ...state.map((item) => ({ text: item.text, told: null })),
+                ...history.map((item) => ({ text: item.text, told: item.metadata?.toldAt ?? null })),
+              ];
               // the receipts: what the answer is standing on, cited on screen
               if (raw.length)
                 pushCard({ id: ++seq.current, kind: "receipts", status: "ready", hits: raw, ttl: 10_000 });
-              const hits = raw.map(
-                (r) =>
-                  `- ${r.text}${r.told ? ` (told ${r.told.slice(0, 16).replace("T", " ")})` : ""}`,
-              );
-              return hits.length
-                ? `Found ${hits.length} memories:\n${hits.join("\n")}`
-                : "No memories found for that.";
+              return typeof data.agentText === "string"
+                ? data.agentText
+                : "No applicable memory context was compiled for that.";
             }),
           get_profile: () =>
             track("reading profile", async () => {

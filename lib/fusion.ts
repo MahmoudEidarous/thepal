@@ -49,7 +49,14 @@ type Lean = {
   entities: string | null;
 };
 
-type Corpus = { docs: Lean[]; aliases: Map<string, string> };
+type Corpus = {
+  docs: Lean[];
+  aliases: Map<string, string>;
+  // Canonical external content is searchable source material, never user
+  // memory. Supermemory may still return an extracted hit for it, so retain
+  // an explicit deny set and apply it after every semantic probe.
+  blockedIds: Set<string>;
+};
 
 const CORPUS_TTL = 120_000;
 const corpusCache = new Map<string, { at: number; corpus: Corpus }>();
@@ -84,9 +91,19 @@ async function getCorpus(space: Space): Promise<Corpus> {
   };
   const docs: Lean[] = [];
   const aliases = new Map<string, string>();
+  const blockedIds = new Set<string>();
   for (const d of res.memories ?? []) {
     const m = d.metadata ?? {};
     if (m.type === "briefing") continue;
+    const source = str(m.source)?.toLowerCase() ?? "";
+    if (
+      m.canonicalTrustTier === "external_content" ||
+      source.includes("recall-web") ||
+      source.startsWith("web:")
+    ) {
+      blockedIds.add(d.id);
+      continue;
+    }
     const hydrated = contentCache.get(d.id);
     docs.push({
       id: d.id,
@@ -110,7 +127,7 @@ async function getCorpus(space: Space): Promise<Corpus> {
       for (const a of all) if (a.length > 2) aliases.set(a.toLowerCase(), all[0]);
     }
   }
-  const corpus = { docs, aliases };
+  const corpus = { docs, aliases, blockedIds };
   corpusCache.set(tag, { at: Date.now(), corpus });
   return corpus;
 }
@@ -294,7 +311,7 @@ export async function fusedRecall(opts: {
       .catch(() => []);
 
   const corpusP = getCorpus(space).catch(
-    (): Corpus => ({ docs: [], aliases: new Map<string, string>() }),
+    (): Corpus => ({ docs: [], aliases: new Map<string, string>(), blockedIds: new Set<string>() }),
   );
 
   // probe variants — weights validated against the vague bank
@@ -400,11 +417,15 @@ export async function fusedRecall(opts: {
     }
   }
 
-  const [baseRaw, probeResults, ruleLists] = await Promise.all([
+  const [baseSearch, probeSearch, ruleLists] = await Promise.all([
     searchOne(q),
     Promise.all(probes.map((p) => searchOne(p.q))),
     Promise.all(listsP),
   ]);
+  const baseRaw = baseSearch.filter((hit) => !corpus.blockedIds.has(hit.documentId));
+  const probeResults = probeSearch.map((results) =>
+    results.filter((hit) => !corpus.blockedIds.has(hit.documentId)),
+  );
 
   // rank with the memory view, SPEAK the source document. Extraction is
   // lossy — "grandmother owned a bakery" drops the bakery's name; the
@@ -416,7 +437,14 @@ export async function fusedRecall(opts: {
     const d = docsById.get(h.documentId);
     if (!d) return h;
     const text = await hydrate(d);
-    return text && text.length <= 700 ? { ...h, memory: text } : h;
+    if (!text || text.length > 700 || text === h.memory) return h;
+    // A graph memory can be linked to several supporting documents and the
+    // provider currently returns only the first. Usually the source envelope
+    // is richer, but occasionally that first document is merely adjacent
+    // (for example, an apartment-location memory linked first to its rent
+    // note). Do not erase the correctly ranked fact with unrelated source
+    // text; only speak the document when it actually supports the extraction.
+    return jaccard(words(text), words(h.memory)) >= 0.12 ? { ...h, memory: text } : h;
   };
   const base = await Promise.all(baseRaw.map(speakDoc));
   for (let i = 0; i < probeResults.length; i++)
@@ -494,7 +522,7 @@ function monthsBack(today: string, n: number): string | null {
 
 export async function returningPast(space: Space, today: string): Promise<Anniversary[]> {
   const corpus = await getCorpus(space).catch(
-    (): Corpus => ({ docs: [], aliases: new Map<string, string>() }),
+    (): Corpus => ({ docs: [], aliases: new Map<string, string>(), blockedIds: new Set<string>() }),
   );
   const thisYear = Number(today.slice(0, 4));
   const mmdd = today.slice(5);
@@ -555,7 +583,7 @@ export async function storyRecall(opts: {
   const [hits, corpus] = await Promise.all([
     fusedRecall({ q: opts.q, space: opts.space, limit: Math.max(limit * 2 + 4, 20) }),
     getCorpus(opts.space).catch(
-      (): Corpus => ({ docs: [], aliases: new Map<string, string>() }),
+      (): Corpus => ({ docs: [], aliases: new Map<string, string>(), blockedIds: new Set<string>() }),
     ),
   ]);
   // the topic must actually live in this corpus — nonsense peaks near

@@ -2,7 +2,7 @@ import { enrich, localToday, type Envelope } from "@/lib/envelope";
 import { fusedRecall, invalidateCorpus, type Hit } from "@/lib/fusion";
 import { openCommitments, setLedgerStatus } from "@/lib/ledger";
 import { spaceTag, supermemory, type Space } from "@/lib/supermemory";
-import { MEMORY_CONTRACT_VERSION, type TrustTier } from "./contracts";
+import { MEMORY_CONTRACT_VERSION, type Sensitivity, type TrustTier } from "./contracts";
 
 const CHANGE_HINT =
   /\b(actually|instead|no longer|not anymore|anymore|moved|moving|changed|switch(ed)?|turns out|correction|scratch|forget (that|the|it)|never ?mind|new plan|re-?decided|decided on|going with|went with|settled on|updat(e|ed|ing)|wrong|after all|from now on|these days|now)\b/i;
@@ -14,6 +14,7 @@ export type CaptureProcessorInput = {
   payloadHash?: string;
   recordedAt?: string;
   trust?: TrustTier;
+  sensitivity?: Sensitivity;
   content: string;
   preRedacted: boolean;
   source: string;
@@ -27,6 +28,7 @@ type CanonicalCaptureProcessorInput = CaptureProcessorInput & {
   payloadHash: string;
   recordedAt: string;
   trust: TrustTier;
+  sensitivity: Sensitivity;
 };
 
 type CaptureAnalysis = {
@@ -146,6 +148,7 @@ async function processCapture(input: CaptureProcessorInput) {
       canonicalPayloadHash: input.payloadHash,
       canonicalRecordedAt: input.recordedAt,
       canonicalTrustTier: input.trust,
+      canonicalSensitivity: input.sensitivity ?? "normal",
       memoryContractVersion: MEMORY_CONTRACT_VERSION,
     });
   }

@@ -55,6 +55,29 @@ const check = (ok, label, detail = "") => {
   }
 };
 const cleanup = [];
+const canonicalCleanup = [];
+
+const providerId = async (data) => {
+  const eventId = data.receipt?.eventId;
+  if (!eventId || data.id !== eventId) return data.id;
+  for (let i = 0; i < 40; i++) {
+    const captures = await fetch(`${BASE}/api/captures?space=eval`)
+      .then((r) => r.json())
+      .then((body) => body.captures ?? [])
+      .catch(() => []);
+    const mirror = captures.find((capture) => capture.meta?.canonicalEventId === eventId);
+    if (mirror?.id) return mirror.id;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return data.id;
+};
+
+const deleteCanonical = async (eventId) => {
+  const preview = await post("/api/memory/deletions/preview", { eventId });
+  if (preview.status !== 200 || !preview.data.token) return false;
+  const executed = await post("/api/memory/deletions/execute", { token: preview.data.token });
+  return executed.status === 200;
+};
 
 // ── reschedule: a new telling retires the old terms ────────────────
 const a = await post("/api/capture", {
@@ -62,31 +85,35 @@ const a = await post("/api/capture", {
   space: "eval",
   source: "eval-ledger",
 });
-cleanup.push(a.data.id);
+const aId = await providerId(a.data);
+cleanup.push(aId);
+if (a.data.receipt?.eventId) canonicalCleanup.push(a.data.receipt.eventId);
 check(a.status === 200 && a.data.envelope?.type === "commitment", "plants an open commitment");
-await settle(a.data.id);
+await settle(aId);
 
 const b = await post("/api/capture", {
   content: "My dentist appointment is actually going to be Thursday July 16th, not Tuesday",
   space: "eval",
   source: "eval-ledger",
 });
-cleanup.push(b.data.id);
+const bId = await providerId(b.data);
+cleanup.push(bId);
+if (b.data.receipt?.eventId) canonicalCleanup.push(b.data.receipt.eventId);
 check(
   typeof b.data.superseded === "string" && /dentist/i.test(b.data.superseded),
   "the enricher names the open item a reschedule replaces",
   JSON.stringify(b.data.envelope?.supersedes),
 );
 check(
-  b.data.conflict?.id === a.data.id && /dentist/i.test(b.data.conflict?.text ?? ""),
+  b.data.conflict?.id === aId && /dentist/i.test(b.data.conflict?.text ?? ""),
   "the filing receipt exposes the old telling as an update",
   JSON.stringify(b.data.conflict ?? null),
 );
-const oldDoc = await engineDoc(a.data.id);
+const oldDoc = await engineDoc(aId);
 check(oldDoc.metadata?.status === "superseded", "old terms retire as superseded");
-check(oldDoc.metadata?.supersededBy === b.data.id, "audit trail links old → new");
-const newDoc = await engineDoc(b.data.id);
-check(newDoc.metadata?.updates === a.data.id, "new telling stores the old → new lineage");
+check(oldDoc.metadata?.supersededBy === bId, "audit trail links old → new");
+const newDoc = await engineDoc(bId);
+check(newDoc.metadata?.updates === aId, "new telling stores the old → new lineage");
 check(!!newDoc.metadata?.updatesTold, "lineage keeps when the prior telling was told");
 {
   const dentist = (await evalAgenda()).filter((c) => /dentist/i.test(c.content));
@@ -103,7 +130,9 @@ const c = await post("/api/capture", {
   space: "eval",
   source: "eval-ledger",
 });
-cleanup.push(c.data.id);
+const cId = await providerId(c.data);
+cleanup.push(cId);
+if (c.data.receipt?.eventId) canonicalCleanup.push(c.data.receipt.eventId);
 check(
   !c.data.superseded,
   "a different errand at the same place never supersedes",
@@ -111,8 +140,8 @@ check(
 );
 // closures below target docs that have settled — like a real user
 // closing something told earlier (the route also guards the race)
-await settle(b.data.id);
-await settle(c.data.id);
+await settle(bId);
+await settle(cId);
 
 // ── cancellation: scrapped plans close as cancelled, never deleted ──
 const cx = await post("/api/agenda/complete", {
@@ -121,12 +150,14 @@ const cx = await post("/api/agenda/complete", {
   outcome: "cancelled",
 });
 check(cx.status === 200 && cx.data.outcome === "cancelled", "cancel closes with outcome=cancelled");
-const cDoc = await engineDoc(c.data.id);
+if (cx.data.receipt?.eventId) canonicalCleanup.push(cx.data.receipt.eventId);
+const cDoc = await engineDoc(cId);
 check(cDoc.metadata?.status === "cancelled", "the document keeps status=cancelled");
 
 // ── completion: done stays done ─────────────────────────────────────
 const dn = await post("/api/agenda/complete", { q: "dentist appointment thursday", space: "eval" });
 check(dn.status === 200 && dn.data.outcome === "done", "done closes with outcome=done");
+if (dn.data.receipt?.eventId) canonicalCleanup.push(dn.data.receipt.eventId);
 
 // ── neither retired state may appear in the ledger views ───────────
 // the engine's list endpoint can serve a stale snapshot for a beat
@@ -173,7 +204,14 @@ const until = async (fn) => {
 
 // ── cleanup — settle first, delete everything planted + closure events
 for (const id of cleanup) await settle(id);
-for (const id of cleanup) await engineDoc(id, "DELETE");
+const canonicalDeleted = new Set();
+for (const eventId of canonicalCleanup) {
+  if (await deleteCanonical(eventId)) canonicalDeleted.add(eventId);
+}
+// Compatibility fallback for a legacy server that did not return receipts.
+if (!canonicalCleanup.length) {
+  for (const id of cleanup) await engineDoc(id, "DELETE");
+}
 // the Done/Cancelled events written by the complete route
 const listed = await fetch(`${ENGINE}/v3/documents/list`, {
   method: "POST",
@@ -188,10 +226,15 @@ for (const m of listed.memories ?? []) {
   const text = `${m.content ?? ""} ${m.title ?? ""} ${m.summary ?? ""}`;
   if (
     md.source === "eval-ledger" ||
-    (md.source === "recall-ledger" && /dentist|x-ray/i.test(text))
+    (String(md.source ?? "").startsWith("recall-ledger") && /dentist|x-ray/i.test(text))
   ) {
-    await settle(m.id);
-    await engineDoc(m.id, "DELETE");
+    const eventId = typeof md.canonicalEventId === "string" ? md.canonicalEventId : null;
+    if (eventId && !canonicalDeleted.has(eventId)) {
+      if (await deleteCanonical(eventId)) canonicalDeleted.add(eventId);
+    } else if (!eventId) {
+      await settle(m.id);
+      await engineDoc(m.id, "DELETE");
+    }
   }
 }
 console.log(`\n${pass}/${pass + fail} checks green`);

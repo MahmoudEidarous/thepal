@@ -1,0 +1,46 @@
+import type { WorkingTurn } from "@/lib/memory/context-compiler";
+import { compileMemoryContext } from "@/lib/memory/context-service";
+import { apiError, asSpace } from "@/lib/validate";
+
+export const runtime = "nodejs";
+
+function recentTurns(value: unknown): WorkingTurn[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (turn): turn is { role: "user" | "agent"; text: string } =>
+        !!turn &&
+        typeof turn === "object" &&
+        ((turn as { role?: unknown }).role === "user" || (turn as { role?: unknown }).role === "agent") &&
+        typeof (turn as { text?: unknown }).text === "string",
+    )
+    .slice(-8)
+    .map((turn) => ({ role: turn.role, text: turn.text.slice(0, 2_000) }));
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json().catch(() => ({}));
+    const query = typeof body.query === "string"
+      ? body.query
+      : typeof body.q === "string"
+        ? body.q
+        : "";
+    const context = await compileMemoryContext({
+      query,
+      space: asSpace(body.space),
+      recentTurns: recentTurns(body.recentTurns),
+      selectedMemory: typeof body.selectedMemory === "string" ? body.selectedMemory : null,
+      maxTokens: typeof body.maxTokens === "number" ? body.maxTokens : undefined,
+      seenProspective: Array.isArray(body.seenProspective)
+        ? body.seenProspective.filter((id: unknown): id is string => typeof id === "string").slice(0, 50)
+        : [],
+      includeHistory: body.includeHistory !== false,
+      includeProspective: body.includeProspective !== false,
+      includeObligations: body.includeObligations !== false,
+    });
+    return Response.json(context);
+  } catch (error) {
+    return apiError(error);
+  }
+}

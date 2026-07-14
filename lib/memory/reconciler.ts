@@ -83,6 +83,7 @@ async function processClaimedJob(
       payloadHash: event.payloadHash,
       recordedAt: event.recordedAt,
       trust: event.source.trust,
+      sensitivity: event.sensitivity,
       content: payload.content,
       preRedacted: payload.redacted,
       source: payload.legacySource,

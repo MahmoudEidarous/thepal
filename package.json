@@ -13,6 +13,7 @@
     "eval:memory-foundation": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning scripts/eval-memory-foundation.mjs",
     "eval:memory-truth": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-truth.mjs",
     "eval:memory-threads": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-threads.mjs",
+    "eval:memory-context": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-context.mjs",
     "eval:memory-stress": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning scripts/eval-memory-stress.mjs"
   },
   "dependencies": {

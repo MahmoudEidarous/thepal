@@ -33,6 +33,11 @@
       "expected": "49 checks passing"
     },
     {
+      "name": "bounded context compiler",
+      "command": "npm run eval:memory-context",
+      "expected": "39 checks passing"
+    },
+    {
       "name": "memory concurrency and crash recovery",
       "command": "npm run eval:memory-stress",
       "expected": "12 checks passing"
