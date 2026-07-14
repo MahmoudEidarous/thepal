@@ -38,7 +38,7 @@ function sqliteConstructor(): SqliteModule["DatabaseSync"] {
 }
 
 const CONTRACT_VERSION = 1 as const;
-const SCHEMA_VERSION = 4 as const;
+const SCHEMA_VERSION = 5 as const;
 const MAX_JOB_ATTEMPTS = 5;
 const PROCESSING_JOB_KIND = "enrich_and_index" as const;
 
@@ -111,7 +111,32 @@ export type DeletionPreview = {
   affectedBeliefs: string[];
   affectedThreads: string[];
   affectedProspective: string[];
+  affectedAttention: number;
   mirrored: boolean;
+};
+
+export type AttentionDecisionRecord = {
+  id: string;
+  userId: string;
+  space: MemorySpace;
+  sessionId: string;
+  engineVersion: string;
+  mode: "shadow" | "guarded" | "active";
+  momentKind: "session_start" | "user_turn" | "lull";
+  selectedCandidateId: string | null;
+  selectedKind: string | null;
+  selectedAction: string | null;
+  selectedScore: number | null;
+  cooldownKey: string | null;
+  shouldSurface: boolean;
+  silenceReason: string | null;
+  decision: Record<string, unknown>;
+  evidenceEventIds: string[];
+  createdAt: string;
+};
+
+export type RecordAttentionDecisionInput = Omit<AttentionDecisionRecord, "evidenceEventIds"> & {
+  evidenceEventIds?: string[];
 };
 
 export type TombstoneResult = {
@@ -151,6 +176,7 @@ export type LedgerStats = {
   threads: number;
   threadTransitions: number;
   prospective: number;
+  attentionDecisions: number;
   mirrors: number;
 };
 
@@ -374,6 +400,41 @@ const MIGRATION_4 = `
 
   CREATE INDEX IF NOT EXISTS memory_prospective_open
     ON memory_prospective_triggers(user_id, space, status, snoozed_until, created_at);
+`;
+
+const MIGRATION_5 = `
+  CREATE TABLE IF NOT EXISTS memory_attention_decisions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    session_id TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('shadow','guarded','active')),
+    moment_kind TEXT NOT NULL CHECK (moment_kind IN ('session_start','user_turn','lull')),
+    selected_candidate_id TEXT,
+    selected_kind TEXT,
+    selected_action TEXT,
+    selected_score INTEGER,
+    cooldown_key TEXT,
+    should_surface INTEGER NOT NULL CHECK (should_surface IN (0,1)),
+    silence_reason TEXT,
+    decision_json TEXT NOT NULL CHECK (json_valid(decision_json)),
+    created_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_attention_user_time
+    ON memory_attention_decisions(user_id, space, created_at DESC);
+  CREATE INDEX IF NOT EXISTS memory_attention_cooldown
+    ON memory_attention_decisions(user_id, space, cooldown_key, should_surface, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS memory_attention_evidence (
+    decision_id TEXT NOT NULL REFERENCES memory_attention_decisions(id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL REFERENCES memory_events(id),
+    PRIMARY KEY(decision_id, event_id)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_attention_evidence_event
+    ON memory_attention_evidence(event_id, decision_id);
 `;
 
 function text(row: SqlRow, key: string): string {
@@ -683,6 +744,23 @@ export class MemoryEventLedger {
           )
           .run(4, "canonical prospective-memory projection", now);
         this.database.exec("PRAGMA user_version = 4");
+        this.database.exec("COMMIT");
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    }
+    if (current < 5) {
+      const now = new Date().toISOString();
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(MIGRATION_5);
+        this.database
+          .prepare(
+            "INSERT OR IGNORE INTO memory_schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+          )
+          .run(5, "auditable unified-attention decisions", now);
+        this.database.exec("PRAGMA user_version = 5");
         this.database.exec("COMMIT");
       } catch (error) {
         this.database.exec("ROLLBACK");
@@ -1601,6 +1679,125 @@ export class MemoryEventLedger {
     return rows.map(prospectiveFromRow);
   }
 
+  recordAttentionDecision(input: RecordAttentionDecisionInput): AttentionDecisionRecord {
+    const evidenceEventIds = [...new Set(input.evidenceEventIds ?? [])].sort();
+    for (const eventId of evidenceEventIds) {
+      const event = this.getEvent(eventId);
+      if (!event || event.tombstonedAt) {
+        throw new Error(`memory ledger: attention evidence ${eventId} is unavailable`);
+      }
+      if (event.userId !== input.userId || event.space !== input.space) {
+        throw new Error("memory ledger: attention evidence crossed a user or memory space");
+      }
+    }
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database
+        .prepare(`
+          INSERT INTO memory_attention_decisions(
+            id, user_id, space, session_id, engine_version, mode, moment_kind,
+            selected_candidate_id, selected_kind, selected_action, selected_score,
+            cooldown_key, should_surface, silence_reason, decision_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          input.id,
+          input.userId,
+          input.space,
+          input.sessionId,
+          input.engineVersion,
+          input.mode,
+          input.momentKind,
+          input.selectedCandidateId,
+          input.selectedKind,
+          input.selectedAction,
+          input.selectedScore,
+          input.cooldownKey,
+          input.shouldSurface ? 1 : 0,
+          input.silenceReason,
+          JSON.stringify(input.decision),
+          input.createdAt,
+        );
+      const link = this.database.prepare(
+        "INSERT INTO memory_attention_evidence(decision_id, event_id) VALUES (?, ?)",
+      );
+      for (const eventId of evidenceEventIds) link.run(input.id, eventId);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return { ...input, evidenceEventIds };
+  }
+
+  listAttentionDecisions(options: {
+    userId?: string;
+    space: MemorySpace;
+    sessionId?: string;
+    surfacedOnly?: boolean;
+    since?: string;
+    limit?: number;
+  }): AttentionDecisionRecord[] {
+    const conditions = ["d.user_id = ?", "d.space = ?"];
+    const values: Array<string | number> = [options.userId ?? "local-user", options.space];
+    if (options.sessionId) {
+      conditions.push("d.session_id = ?");
+      values.push(options.sessionId);
+    }
+    if (options.surfacedOnly) conditions.push("d.should_surface = 1");
+    if (options.since) {
+      conditions.push("d.created_at >= ?");
+      values.push(options.since);
+    }
+    const limit = Math.max(1, Math.min(5_000, Math.floor(options.limit ?? 200)));
+    values.push(limit);
+    const rows = this.database
+      .prepare(`
+        SELECT d.*,
+          COALESCE(json_group_array(e.event_id) FILTER (WHERE e.event_id IS NOT NULL), '[]')
+            AS evidence_event_ids_json
+        FROM memory_attention_decisions d
+        LEFT JOIN memory_attention_evidence e ON e.decision_id = d.id
+        WHERE ${conditions.join(" AND ")}
+        GROUP BY d.id
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT ?
+      `)
+      .all(...values) as SqlRow[];
+    return rows.map((row) => {
+      const selected = row.selected_score;
+      return {
+        id: text(row, "id"),
+        userId: text(row, "user_id"),
+        space: text(row, "space") as MemorySpace,
+        sessionId: text(row, "session_id"),
+        engineVersion: text(row, "engine_version"),
+        mode: text(row, "mode") as AttentionDecisionRecord["mode"],
+        momentKind: text(row, "moment_kind") as AttentionDecisionRecord["momentKind"],
+        selectedCandidateId: nullableText(row, "selected_candidate_id"),
+        selectedKind: nullableText(row, "selected_kind"),
+        selectedAction: nullableText(row, "selected_action"),
+        selectedScore:
+          typeof selected === "number" || typeof selected === "bigint" ? Number(selected) : null,
+        cooldownKey: nullableText(row, "cooldown_key"),
+        shouldSurface: integer(row, "should_surface") === 1,
+        silenceReason: nullableText(row, "silence_reason"),
+        decision: JSON.parse(text(row, "decision_json")) as Record<string, unknown>,
+        evidenceEventIds: JSON.parse(text(row, "evidence_event_ids_json")) as string[],
+        createdAt: text(row, "created_at"),
+      };
+    });
+  }
+
+  attentionDecisionCountForEvent(eventId: string): number {
+    const row = this.database
+      .prepare(
+        "SELECT COUNT(DISTINCT decision_id) AS count FROM memory_attention_evidence WHERE event_id = ?",
+      )
+      .get(eventId) as SqlRow;
+    return integer(row, "count");
+  }
+
   listClaimRelations(userId: string, space: MemorySpace): StoredClaimRelation[] {
     const rows = this.database
       .prepare(`
@@ -1654,6 +1851,7 @@ export class MemoryEventLedger {
     })
       .filter((trigger) => trigger.evidenceEventIds.includes(eventId))
       .map((trigger) => trigger.id);
+    const affectedAttention = this.attentionDecisionCountForEvent(eventId);
     const token = randomUUID();
     const issuedAt = options.now ?? new Date().toISOString();
     const expiresAt = new Date(
@@ -1673,6 +1871,7 @@ export class MemoryEventLedger {
       affectedBeliefs,
       affectedThreads,
       affectedProspective,
+      affectedAttention,
       mirrored: this.getMirror(eventId)?.status === "synced",
     };
   }
@@ -1729,6 +1928,14 @@ export class MemoryEventLedger {
       this.database
         .prepare("DELETE FROM memory_prospective_triggers WHERE user_id = ? AND space = ?")
         .run(event.userId, event.space);
+      this.database
+        .prepare(`
+          DELETE FROM memory_attention_decisions
+          WHERE id IN (
+            SELECT decision_id FROM memory_attention_evidence WHERE event_id = ?
+          )
+        `)
+        .run(eventId);
       this.database
         .prepare(`
           UPDATE memory_jobs
@@ -1817,6 +2024,7 @@ export class MemoryEventLedger {
       threads: count("memory_threads"),
       threadTransitions: count("memory_thread_transitions"),
       prospective: count("memory_prospective_triggers"),
+      attentionDecisions: count("memory_attention_decisions"),
       mirrors: count("memory_mirrors"),
     };
   }

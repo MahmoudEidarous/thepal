@@ -15,6 +15,7 @@
     "eval:memory-threads": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-threads.mjs",
     "eval:memory-context": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-context.mjs",
     "eval:memory-continuity": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-continuity.mjs",
+    "eval:memory-attention": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-attention.mjs",
     "eval:memory-stress": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning scripts/eval-memory-stress.mjs"
   },
   "dependencies": {

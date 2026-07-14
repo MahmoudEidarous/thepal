@@ -38,6 +38,16 @@
       "expected": "39 checks passing"
     },
     {
+      "name": "prospective and human continuity projections",
+      "command": "npm run eval:memory-continuity",
+      "expected": "39 checks passing"
+    },
+    {
+      "name": "unified attention and intelligent silence",
+      "command": "npm run eval:memory-attention",
+      "expected": "67 checks passing"
+    },
+    {
       "name": "memory concurrency and crash recovery",
       "command": "npm run eval:memory-stress",
       "expected": "12 checks passing"

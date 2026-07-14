@@ -1,4 +1,5 @@
 import { spaceTag, supermemory, type Space } from "./supermemory";
+import type { Sensitivity, TrustTier } from "./memory/contracts";
 
 // Vague-query fusion + truth arbitration for /api/recall.
 //
@@ -47,6 +48,9 @@ type Lean = {
   // the ledger's own state (metadata.status): open | done for commitments
   ledger: string | null;
   entities: string | null;
+  trust: TrustTier | null;
+  sensitivity: Sensitivity;
+  eventId: string | null;
 };
 
 type Corpus = {
@@ -116,6 +120,13 @@ async function getCorpus(space: Space): Promise<Corpus> {
       type: str(m.type),
       ledger: str(m.status),
       entities: str(m.entities),
+      trust: str(m.canonicalTrustTier) as TrustTier | null,
+      sensitivity: (["normal", "sensitive", "restricted"] as const).includes(
+        str(m.canonicalSensitivity) as Sensitivity,
+      )
+        ? (str(m.canonicalSensitivity) as Sensitivity)
+        : "normal",
+      eventId: str(m.canonicalEventId),
     });
     // "Layla/my sister#person, Kasr Al Ainy hospital/Kasr Al Ainy#place"
     const raw = str(m.entities);
@@ -509,7 +520,14 @@ export async function fusedRecall(opts: {
 // N years, six months, or one month before today. No model in the loop —
 // the past returns by arithmetic. Rides the same corpus cache as recall.
 
-export type Anniversary = { text: string; when: string; storyDate: string };
+export type Anniversary = {
+  text: string;
+  when: string;
+  storyDate: string;
+  trust: TrustTier | null;
+  sensitivity: Sensitivity;
+  evidenceEventIds: string[];
+};
 
 // today minus n calendar months, or null when the day would roll over
 // (July 31 minus a month is not July 1 — that day has no anniversary)
@@ -553,7 +571,14 @@ export async function returningPast(space: Space, today: string): Promise<Annive
     const text = (await hydrate(h.d)).slice(0, 180);
     // closure events are bookkeeping, not the past returning
     if (!text || /^(Done|Cancelled):/.test(text)) continue;
-    out.push({ text, when: h.when, storyDate: h.d.story! });
+    out.push({
+      text,
+      when: h.when,
+      storyDate: h.d.story!,
+      trust: h.d.trust,
+      sensitivity: h.d.sensitivity,
+      evidenceEventIds: h.d.eventId ? [h.d.eventId] : [],
+    });
   }
   return out;
 }

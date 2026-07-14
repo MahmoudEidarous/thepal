@@ -24,6 +24,7 @@ function publicStats() {
     threads: stats.threads,
     threadTransitions: stats.threadTransitions,
     prospective: stats.prospective,
+    attentionDecisions: stats.attentionDecisions,
     mirrors: stats.mirrors,
   };
 }

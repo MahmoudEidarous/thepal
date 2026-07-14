@@ -194,6 +194,7 @@ function VoiceCore({
   const prospectiveEnabledRef = useRef(false);
   const prospectiveSeenRef = useRef(new Set<string>());
   const contextTurnRef = useRef(0);
+  const sessionIdRef = useRef("");
 
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
@@ -259,6 +260,8 @@ function VoiceCore({
           const recentTurns = [...linesRef.current.slice(-7), { role: "user" as const, text: message }];
           void postJson("/api/context/compile", {
             query: message,
+            sessionId: sessionIdRef.current,
+            momentKind: "user_turn",
             recentTurns,
             selectedMemory,
             seenProspective: [...prospectiveSeenRef.current],
@@ -267,8 +270,13 @@ function VoiceCore({
           })
             .then((data) => {
               if (turn !== contextTurnRef.current) return;
-              const match = (data.prospective ?? [])[0] as { id?: string } | undefined;
-              if (match?.id) prospectiveSeenRef.current.add(match.id);
+              const surfaced = data.attention?.surface as
+                | { kind?: string; sourceItemId?: string }
+                | null
+                | undefined;
+              if (surfaced?.kind === "prospective" && surfaced.sourceItemId) {
+                prospectiveSeenRef.current.add(surfaced.sourceItemId);
+              }
               try {
                 if (typeof data.agentText === "string") {
                   conversationRef.current.sendContextualUpdate(data.agentText);
@@ -426,12 +434,13 @@ function VoiceCore({
     setLines([]);
     linesRef.current = [];
     contextTurnRef.current = 0;
+    sessionIdRef.current = crypto.randomUUID();
     try {
       // agenda + boundaries ride in with the session — the agent knows
       // what you owe and what it must never suggest, before you speak.
       // Location + today's sky resolve in the same breath, so "how's the
       // weather?" costs zero tool calls.
-      const [res, agendaData, pinnedData, briefingData, annivData, prospectiveData, senses] = await Promise.all([
+      const [res, agendaData, pinnedData, briefingData, attentionData, prospectiveData, senses] = await Promise.all([
         fetch("/api/voice/signed-url"),
         fetch("/api/agenda")
           .then((r) => (r.ok ? r.json() : { commitments: [] }))
@@ -442,9 +451,15 @@ function VoiceCore({
         fetch("/api/briefings")
           .then((r) => (r.ok ? r.json() : { briefings: [] }))
           .catch(() => ({ briefings: [] })),
-        fetch("/api/anniversaries")
-          .then((r) => (r.ok ? r.json() : { anniversaries: [] }))
-          .catch(() => ({ anniversaries: [] })),
+        postJson("/api/attention/decide", {
+          query: "",
+          sessionId: sessionIdRef.current,
+          momentKind: "session_start",
+          includeHistory: false,
+          includeProspective: true,
+          includeObligations: true,
+          includeAnniversaries: true,
+        }).catch(() => ({ attention: null, attentionText: "" })),
         fetch("/api/prospective")
           .then((r) => (r.ok ? r.json() : { triggers: [] }))
           .catch(() => ({ triggers: [] })),
@@ -483,13 +498,20 @@ function VoiceCore({
         ? (pinnedData.pinned as string[]).map((p) => `- ${p}`).join("\n")
         : "none";
 
-      // the returning past — deterministic story-date anniversaries,
-      // carried in so "a year ago today—" costs zero tool calls
-      type Anniv = { text: string; when: string; storyDate: string };
-      const annivText =
-        ((annivData.anniversaries ?? []) as Anniv[])
-          .map((a) => `- ${a.when} (${a.storyDate}): ${a.text}`)
-          .join("\n") || "none";
+      type AttentionSurface = {
+        kind: string;
+        text: string;
+        sourceItemId: string;
+        metadata?: Record<string, string | number | boolean | null>;
+      };
+      const attentionSurface = (attentionData.attention?.surface ?? null) as AttentionSurface | null;
+      // Raw anniversary inventory is no longer injected. The policy layer
+      // must authorize one before the personality layer is allowed to see it.
+      const annivText = attentionSurface?.kind === "anniversary" ? `- ${attentionSurface.text}` : "none";
+      const attentionText =
+        typeof attentionData.attentionText === "string"
+          ? attentionData.attentionText
+          : "No proactive memory aside is authorized at session start.";
 
       type Prospective = { id: string; topic: string; action: string; snoozedUntil?: string | null };
       const prospective = (prospectiveData.triggers ?? []) as Prospective[];
@@ -516,19 +538,24 @@ function VoiceCore({
           : null,
       );
 
-      // the night editor's briefing, if there's a fresh one — its Focus
-      // line becomes the agent's opening thought
+      // The briefing remains available on request. Its Focus line no longer
+      // bypasses attention and takes over the opening by itself.
       type Briefing = { content: string; createdAt?: string };
       const latest = ((briefingData.briefings ?? []) as Briefing[])[0];
       const fresh =
         latest?.createdAt &&
         Date.now() - new Date(latest.createdAt).getTime() < 20 * 3600_000;
-      const focus = fresh ? latest.content.match(/^\s*Focus:\s*(.+?)\s*$/im)?.[1] : undefined;
       const briefingText = fresh ? latest.content.slice(0, 1200) : "none yet";
 
       // the agent's first words — computed here, from the live ledger
       const items = agendaData.commitments as AgendaItem[];
-      const urgent = items.find((c) => c.overdue || c.dueToday) ?? items.find((c) => c.due);
+      const urgent = attentionSurface?.kind === "obligation"
+        ? items.find(
+            (item) =>
+              attentionSurface.text.includes(item.content) ||
+              item.content.includes(attentionSurface.text),
+          )
+        : undefined;
       const namePart = greetingName ? `, ${greetingName}` : "";
       const hour = new Date().getHours();
       const hi = hour < 5 ? `Still up${namePart}?` : `Hey${namePart}.`;
@@ -558,13 +585,13 @@ function VoiceCore({
       const opening =
         memoryCount === 0
           ? `${hi} We haven't met — I'm Recall. Whatever you tell me, I keep. So: who are you?`
-          : focus
-            ? `${hi} I went through everything while you slept. ${focus}${
-                urgentLine && urgent?.overdue ? ` And ${urgentLine}.` : ""
-              } Where do you want to start?`
-            : urgentLine
+          : urgentLine
               ? `${hi} Before I forget — ${urgentLine}. Talk to me.`
-              : `${hi} ${memoryCount} memories and counting. What's new?`;
+              : attentionSurface?.kind === "anniversary"
+                ? `${hi} ${attentionSurface.text}. That came back to me today.`
+                : attentionSurface?.kind === "thread_follow_up"
+                  ? `${hi} I've been wondering about this: ${attentionSurface.text}. What happened?`
+                  : `${hi} ${memoryCount} memories and counting. What's new?`;
 
       conversation.startSession({
         signedUrl: data.signedUrl,
@@ -580,6 +607,7 @@ function VoiceCore({
           briefing: briefingText,
           anniversaries: annivText,
           prospective: prospectiveText,
+          attention: attentionText,
           place: placeText,
           opening,
         },
@@ -588,9 +616,13 @@ function VoiceCore({
             track("searching memories", async () => {
               const data = await postJson("/api/context/compile", {
                 query,
+                sessionId: sessionIdRef.current,
+                momentKind: "user_turn",
                 recentTurns: linesRef.current.slice(-8),
                 selectedMemory,
                 includeProspective: false,
+                includeAnniversaries: false,
+                focusMode: true,
                 maxTokens: 1_600,
               });
               type CompiledItem = {
