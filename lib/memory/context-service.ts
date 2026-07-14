@@ -29,6 +29,7 @@ export async function compileMemoryContext(
   input: CompileContextInput & {
     seenProspective?: string[];
     includeHistory?: boolean;
+    includePins?: boolean;
     includeProspective?: boolean;
     includeObligations?: boolean;
   },
@@ -65,7 +66,9 @@ export async function compileMemoryContext(
     ? continuityContextViews(ledger, userId, input.space, query, at)
     : [];
   const [pins, commitments, prospective, rawHistory] = await Promise.all([
-    safe("pinned memory", [] as string[], () => (dependencies.getPins ?? pinned)(tag)),
+    input.includePins === false
+      ? Promise.resolve([] as string[])
+      : safe("pinned memory", [] as string[], () => (dependencies.getPins ?? pinned)(tag)),
     input.includeObligations === false
       ? Promise.resolve([] as OpenCommitment[])
       : safe("commitment ledger", [] as OpenCommitment[], () =>

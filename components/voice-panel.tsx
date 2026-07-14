@@ -17,6 +17,44 @@ type PendingForget = {
 };
 
 type Engine = "online" | "offline" | "checking";
+type LatencyOutcome = "ok" | "fallback" | "stale" | "timeout" | "error";
+type LatencySample = {
+  name: string;
+  ms: number;
+  outcome: LatencyOutcome;
+};
+
+class StaleTurnError extends Error {
+  constructor() {
+    super("the user started a newer turn");
+    this.name = "StaleTurnError";
+  }
+}
+
+function percentile(values: number[], ratio: number) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio))];
+}
+
+function latencySummary(samples: LatencySample[]) {
+  const groups = new Map<string, LatencySample[]>();
+  for (const sample of samples) {
+    const current = groups.get(sample.name) ?? [];
+    current.push(sample);
+    groups.set(sample.name, current);
+  }
+  return [...groups.entries()]
+    .map(([name, group]) => ({
+      name,
+      count: group.length,
+      p50: Math.round(percentile(group.map((sample) => sample.ms), 0.5)),
+      p95: Math.round(percentile(group.map((sample) => sample.ms), 0.95)),
+      last: Math.round(group[group.length - 1].ms),
+      outcome: group[group.length - 1].outcome,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
 
 // what /api/capture and /api/amend hand back for the filed card
 type EnvelopePayload = {
@@ -40,11 +78,12 @@ const toFiled = (e: EnvelopePayload) => ({
   prospective: e.prospective ?? null,
 });
 
-async function postJson(path: string, body: unknown) {
+async function postJson(path: string, body: unknown, signal?: AbortSignal) {
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? `${path} failed (${res.status})`);
@@ -76,6 +115,10 @@ function subscribeResize(cb: () => void) {
   return () => window.removeEventListener("resize", cb);
 }
 
+function subscribeStatic() {
+  return () => {};
+}
+
 function VoiceCore({
   engine,
   greetingName,
@@ -95,6 +138,13 @@ function VoiceCore({
   // ?orb=speaking forces a visual state — QA and demo framing only.
   // Read after mount so server and client render the same first frame.
   const [forced, setForced] = useState<OrbState | null>(null);
+  const [latencySamples, setLatencySamples] = useState<LatencySample[]>([]);
+  const latencySamplesRef = useRef<LatencySample[]>([]);
+  const showLatency = useSyncExternalStore(
+    subscribeStatic,
+    () => new URLSearchParams(window.location.search).get("latency") === "1",
+    () => false,
+  );
   // senses — where they are (IP-level, resolved silently at wake) and
   // what the orb has looked at this session
   const placeRef = useRef<Place | null>(null);
@@ -195,8 +245,67 @@ function VoiceCore({
   const prospectiveEnabledRef = useRef(false);
   const prospectiveSeenRef = useRef(new Set<string>());
   const contextTurnRef = useRef(0);
+  const turnControllersRef = useRef(new Set<AbortController>());
+  const bargeInRef = useRef(false);
+  const bargeDetectedAtRef = useRef<number | null>(null);
+  const lastUserVoiceAtRef = useRef<number | null>(null);
+  const replyTimingRef = useRef<{
+    turn: number;
+    speechEndedAt: number;
+    transcriptAt: number;
+    firstTextRecorded: boolean;
+    firstAudioRecorded: boolean;
+  } | null>(null);
+  const sessionStartAtRef = useRef<number | null>(null);
   const sessionIdRef = useRef("");
   const pendingAmbientRef = useRef<string | null>(null);
+
+  const recordLatency = useCallback(
+    (name: string, ms: number, outcome: LatencyOutcome = "ok") => {
+      if (!Number.isFinite(ms) || ms < 0) return;
+      const next = [...latencySamplesRef.current, { name, ms, outcome }].slice(-300);
+      latencySamplesRef.current = next;
+      if (showLatency) setLatencySamples(next);
+    },
+    [showLatency],
+  );
+
+  const beginUserTurn = useCallback(() => {
+    for (const controller of turnControllersRef.current) controller.abort();
+    turnControllersRef.current.clear();
+    contextTurnRef.current += 1;
+    return contextTurnRef.current;
+  }, []);
+
+  const turnJson = useCallback(async (path: string, init?: RequestInit) => {
+    const turn = contextTurnRef.current;
+    const controller = new AbortController();
+    turnControllersRef.current.add(controller);
+    try {
+      const response = await fetch(path, { ...init, signal: controller.signal });
+      const data = await response.json().catch(() => ({}));
+      if (turn !== contextTurnRef.current) throw new StaleTurnError();
+      if (!response.ok) throw new Error(data.error ?? `${path} failed (${response.status})`);
+      return data;
+    } catch (error) {
+      if (controller.signal.aborted || turn !== contextTurnRef.current) {
+        throw new StaleTurnError();
+      }
+      throw error;
+    } finally {
+      turnControllersRef.current.delete(controller);
+    }
+  }, []);
+
+  const turnPostJson = useCallback(
+    (path: string, body: unknown) =>
+      turnJson(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    [turnJson],
+  );
 
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
@@ -252,15 +361,31 @@ function VoiceCore({
   }, [pending]);
 
   const conversation = useConversation({
+    onConnect: () => {
+      if (sessionStartAtRef.current !== null) {
+        recordLatency("session tap → connected", performance.now() - sessionStartAtRef.current);
+        sessionStartAtRef.current = null;
+      }
+    },
     onMessage: ({ message, role }) => {
       if (role === "user") {
         // the user's voice freezes the constellation where the audio
         // actually is — queued chapters must not light over them
         clearStoryFlips();
         if (message.trim()) {
-          const turn = ++contextTurnRef.current;
+          const transcriptAt = performance.now();
+          const turn = beginUserTurn();
+          const lastVoiceAt = lastUserVoiceAtRef.current;
+          replyTimingRef.current = {
+            turn,
+            speechEndedAt:
+              lastVoiceAt && transcriptAt - lastVoiceAt < 4_000 ? lastVoiceAt : transcriptAt,
+            transcriptAt,
+            firstTextRecorded: false,
+            firstAudioRecorded: false,
+          };
           const recentTurns = [...linesRef.current.slice(-7), { role: "user" as const, text: message }];
-          void postJson("/api/context/compile", {
+          void turnPostJson("/api/context/compile", {
             query: message,
             sessionId: sessionIdRef.current,
             momentKind: "user_turn",
@@ -297,6 +422,65 @@ function VoiceCore({
       const nextLines = [...linesRef.current.slice(-30), { role, text: message }];
       linesRef.current = nextLines;
       setLines(nextLines);
+    },
+    onVadScore: ({ vadScore }) => {
+      const now = performance.now();
+      if (vadScore >= 0.55) lastUserVoiceAtRef.current = now;
+      if (!isSpeakingRef.current || vadScore < 0.72 || bargeInRef.current) return;
+
+      // Server interruption is authoritative, but muting locally on the first
+      // confident speech frame means the user never has to talk over queued
+      // audio while that event makes the round trip.
+      bargeInRef.current = true;
+      bargeDetectedAtRef.current = now;
+      duckedRef.current = true;
+      beginUserTurn();
+      clearStoryFlips();
+      try {
+        conversationRef.current.setVolume({ volume: 0.01 });
+      } catch {}
+    },
+    onInterruption: () => {
+      const now = performance.now();
+      if (!bargeInRef.current) beginUserTurn();
+      if (bargeDetectedAtRef.current !== null) {
+        recordLatency("interrupt → server cut", now - bargeDetectedAtRef.current);
+      }
+      bargeInRef.current = true;
+      duckedRef.current = true;
+      clearStoryFlips();
+      try {
+        conversationRef.current.setVolume({ volume: 0.01 });
+      } catch {}
+    },
+    onModeChange: ({ mode }) => {
+      if (mode !== "listening" || !bargeInRef.current) return;
+      bargeInRef.current = false;
+      bargeDetectedAtRef.current = null;
+      duckedRef.current = false;
+      try {
+        conversationRef.current.setVolume({ volume: 1 });
+      } catch {}
+    },
+    onAgentChatResponsePart: ({ type }) => {
+      const timing = replyTimingRef.current;
+      if (!timing || timing.turn !== contextTurnRef.current || timing.firstTextRecorded) return;
+      if (type !== "start" && type !== "delta") return;
+      const now = performance.now();
+      timing.firstTextRecorded = true;
+      recordLatency("speech end → first text", now - timing.speechEndedAt);
+      recordLatency("transcript → first text", now - timing.transcriptAt);
+    },
+    onAudio: () => {
+      const timing = replyTimingRef.current;
+      if (!timing || timing.turn !== contextTurnRef.current || timing.firstAudioRecorded) return;
+      const now = performance.now();
+      timing.firstAudioRecorded = true;
+      recordLatency("speech end → first audio", now - timing.speechEndedAt);
+      recordLatency("transcript → first audio", now - timing.transcriptAt);
+    },
+    onPing: ({ ping_ms: pingMs }) => {
+      if (typeof pingMs === "number") recordLatency("network ping", pingMs);
     },
     onError: (message) => setError(typeof message === "string" ? message : "Connection error"),
   });
@@ -341,8 +525,8 @@ function VoiceCore({
   // has to transcribe the user's first word before it cuts the agent);
   // until it lands she keeps playing over them. So the mic is watched
   // locally: the user's voice rising while she speaks ducks her volume
-  // under them within ~120ms, and the real interruption finishes the
-  // cut. False alarm (a cough, a passing truck) restores after a beat.
+  // under them within ~120ms if server VAD has not already done it, and
+  // the real interruption finishes the cut. False alarms restore shortly.
   const duckedRef = useRef(false);
   useEffect(() => {
     if (!connected) return;
@@ -350,6 +534,8 @@ function VoiceCore({
     let quietTicks = 0;
     const restore = () => {
       duckedRef.current = false;
+      bargeInRef.current = false;
+      bargeDetectedAtRef.current = null;
       quietTicks = 0;
       try {
         conversationRef.current.setVolume({ volume: 1 });
@@ -373,8 +559,14 @@ function VoiceCore({
         quietTicks = 0;
         if (voiceTicks >= 2 && !duckedRef.current) {
           duckedRef.current = true;
+          if (!bargeInRef.current) {
+            bargeInRef.current = true;
+            bargeDetectedAtRef.current = performance.now();
+            beginUserTurn();
+            clearStoryFlips();
+          }
           try {
-            c.setVolume({ volume: 0.12 });
+            c.setVolume({ volume: 0.01 });
           } catch {}
         }
       } else {
@@ -388,7 +580,7 @@ function VoiceCore({
       clearInterval(t);
       restore();
     };
-  }, [connected]);
+  }, [connected, beginUserTurn]);
 
   // a story doesn't outlive its narrator — clear it when the session ends
   const wasConnected = useRef(false);
@@ -433,12 +625,19 @@ function VoiceCore({
       responseBudgetMs: number | null = 6_000,
     ): Promise<string> => {
       const id = ++seq.current;
+      const toolTurn = contextTurnRef.current;
+      const startedAt = performance.now();
+      let outcome: LatencyOutcome = "ok";
       let timeout: ReturnType<typeof setTimeout> | undefined;
       setActivity((a) => [...a, { id, label }]);
       try {
-        if (responseBudgetMs === null) return await fn();
+        const task = fn().then((result) => {
+          if (toolTurn !== contextTurnRef.current) throw new StaleTurnError();
+          return result;
+        });
+        if (responseBudgetMs === null) return await task;
         return await Promise.race([
-          fn(),
+          task,
           new Promise<string>((_, reject) => {
             timeout = setTimeout(
               () => reject(new Error(`response budget exceeded after ${responseBudgetMs}ms`)),
@@ -447,13 +646,21 @@ function VoiceCore({
           }),
         ]);
       } catch (e) {
+        if (e instanceof StaleTurnError || (e instanceof DOMException && e.name === "AbortError")) {
+          outcome = "stale";
+          return "INTERRUPTED TURN: discard this result completely. Do not mention the tool, error, or previous question. Listen to and answer the user's newer turn.";
+        }
+        outcome = e instanceof Error && e.message.includes("response budget exceeded")
+          ? "timeout"
+          : "error";
         return `Tool unavailable: ${e instanceof Error ? e.message : "unknown error"}. Acknowledge it briefly and keep the conversation moving; never wait in silence or repeatedly retry.`;
       } finally {
         if (timeout) clearTimeout(timeout);
+        recordLatency(`tool · ${label}`, performance.now() - startedAt, outcome);
         setActivity((a) => a.filter((x) => x.id !== id));
       }
     },
-    [],
+    [recordLatency],
   );
 
   async function wake() {
@@ -464,7 +671,8 @@ function VoiceCore({
     setError(null);
     setLines([]);
     linesRef.current = [];
-    contextTurnRef.current = 0;
+    beginUserTurn();
+    sessionStartAtRef.current = performance.now();
     sessionIdRef.current = crypto.randomUUID();
     try {
       // Agenda + boundaries ride in with the session. Location and weather
@@ -800,7 +1008,9 @@ function VoiceCore({
             }),
           search_memories: ({ query }: { query: string }) =>
             track("searching memories", async () => {
-              const data = await postJson("/api/context/compile", {
+              const searchTurn = contextTurnRef.current;
+              const startedAt = performance.now();
+              const common = {
                 query,
                 sessionId: sessionIdRef.current,
                 momentKind: "user_turn",
@@ -810,7 +1020,63 @@ function VoiceCore({
                 includeAnniversaries: false,
                 focusMode: true,
                 maxTokens: 1_600,
+              };
+              const fullPromise = turnPostJson("/api/context/compile", common);
+              // Canonical and semantic requests share the turn abort signal.
+              // Attach immediately so an interruption during the canonical
+              // read cannot leave the parallel provider promise unobserved.
+              void fullPromise.catch(() => {});
+              const canonicalStartedAt = performance.now();
+              const canonical = await turnPostJson("/api/context/compile", {
+                ...common,
+                includeHistory: false,
+                includePins: false,
+                includeObligations: false,
               });
+              recordLatency(
+                "memory · canonical",
+                performance.now() - canonicalStartedAt,
+              );
+              let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+              const withinBudget = await Promise.race([
+                fullPromise.then((data) => ({ data, full: true as const })),
+                new Promise<{ data: null; full: false }>((resolve) => {
+                  budgetTimer = setTimeout(() => resolve({ data: null, full: false }), 900);
+                }),
+              ]);
+              if (budgetTimer) clearTimeout(budgetTimer);
+              const data = withinBudget.full ? withinBudget.data : canonical;
+              if (withinBudget.full) {
+                recordLatency("memory · semantic", performance.now() - startedAt);
+              } else {
+                recordLatency("memory · semantic budget", 900, "fallback");
+                void fullPromise
+                  .then((late) => {
+                    recordLatency("memory · semantic", performance.now() - startedAt);
+                    if (searchTurn !== contextTurnRef.current) return;
+                    const lateHistory = (late.historicalEvidence ?? []) as Array<{
+                      text: string;
+                      metadata?: { toldAt?: string | null };
+                    }>;
+                    if (!lateHistory.length || typeof late.agentText !== "string") return;
+                    pushCard({
+                      id: ++seq.current,
+                      kind: "receipts",
+                      status: "ready",
+                      hits: lateHistory.map((item) => ({
+                        text: item.text,
+                        told: item.metadata?.toldAt ?? null,
+                      })),
+                      ttl: 10_000,
+                    });
+                    try {
+                      conversationRef.current.sendContextualUpdate(
+                        `Late semantic evidence for the CURRENT turn arrived:\n${late.agentText}\nUse it only if you are still answering that exact turn. Never interrupt a newer user turn or restart an answer to announce it.`,
+                      );
+                    } catch {}
+                  })
+                  .catch(() => {});
+              }
               type CompiledItem = {
                 text: string;
                 confidence?: string | null;
@@ -829,14 +1095,16 @@ function VoiceCore({
               // the receipts: what the answer is standing on, cited on screen
               if (raw.length)
                 pushCard({ id: ++seq.current, kind: "receipts", status: "ready", hits: raw, ttl: 10_000 });
-              return typeof data.agentText === "string"
+              const agentText = typeof data.agentText === "string"
                 ? data.agentText
-                : "No applicable memory context was compiled for that.";
+                : "No applicable canonical memory context was compiled for that.";
+              return withinBudget.full
+                ? agentText
+                : `${agentText}\n\nFAST CANONICAL FALLBACK: answer now from this current truth. Semantic history is still arriving. If a requested historical detail is absent, say it has not surfaced yet—never claim the user never told you.`;
             }),
           get_profile: () =>
             track("reading profile", async () => {
-              const res = await fetch("/api/profile");
-              const data = await res.json();
+              const data = await turnJson("/api/profile");
               const stat = data.profile?.static ?? [];
               const dyn = data.profile?.dynamic ?? [];
               if (!stat.length && !dyn.length) return "The profile is empty so far.";
@@ -848,6 +1116,8 @@ function VoiceCore({
           // the agent can own it honestly.
           add_memory: ({ content, kind, due }: { content: string; kind?: string; due?: string }) => {
             const id = ++seq.current;
+            const startedAt = performance.now();
+            let outcome: LatencyOutcome = "ok";
             setActivity((a) => [...a, { id, label: "remembering" }]);
             pushCard({ id, kind: "filed", status: "loading", text: content, ttl: 8_000 });
             void postJson("/api/capture", {
@@ -893,6 +1163,7 @@ function VoiceCore({
                 }
               })
               .catch((err) => {
+                outcome = "error";
                 updateCard(id, { status: "error" });
                 try {
                   conversation.sendContextualUpdate(
@@ -900,7 +1171,10 @@ function VoiceCore({
                   );
                 } catch {}
               })
-              .finally(() => setActivity((a) => a.filter((x) => x.id !== id)));
+              .finally(() => {
+                recordLatency("tool · remembering", performance.now() - startedAt, outcome);
+                setActivity((a) => a.filter((x) => x.id !== id));
+              });
             return "Saved. Do not mention or announce the save — just keep the conversation going.";
           },
           add_prospective_memory: ({
@@ -945,8 +1219,7 @@ function VoiceCore({
             }),
           get_prospective_memories: () =>
             track("checking future memories", async () => {
-              const res = await fetch("/api/prospective");
-              const data = await res.json().catch(() => ({ triggers: [] }));
+              const data = await turnJson("/api/prospective");
               const triggers = (data.triggers ?? []) as Array<{
                 id: string;
                 topic: string;
@@ -988,9 +1261,7 @@ function VoiceCore({
                 deferProcessing: true,
               });
               // Refresh the cheap boolean; lifecycle truth remains server-side.
-              const remaining = await fetch("/api/prospective")
-                .then((response) => (response.ok ? response.json() : { triggers: [] }))
-                .catch(() => ({ triggers: [] }));
+              const remaining = await turnJson("/api/prospective");
               prospectiveEnabledRef.current = (remaining.triggers ?? []).length > 0;
               if (action === "fire")
                 return `Prospective memory consumed exactly once. Now say this reminder naturally: ${data.trigger.action}`;
@@ -1002,7 +1273,7 @@ function VoiceCore({
             }),
           preview_forget: ({ about }: { about: string }) =>
             track("previewing forget", async () => {
-              const data = await postJson("/api/forget", { query: about, dryRun: true });
+              const data = await turnPostJson("/api/forget", { query: about, dryRun: true });
               return data.count
                 ? `${data.count} memories would be deleted:\n${data.memories.map((m: string) => `- ${m}`).join("\n")}`
                 : "Nothing matches that.";
@@ -1021,8 +1292,7 @@ function VoiceCore({
             }, null),
           get_agenda: () =>
             track("checking the ledger", async () => {
-              const res = await fetch("/api/agenda");
-              const data = await res.json();
+              const data = await turnJson("/api/agenda");
               const items = (data.commitments ?? []) as Array<{
                 content: string;
                 due: string | null;
@@ -1047,6 +1317,8 @@ function VoiceCore({
           // Fire, react now, hear back only if the match missed.
           complete_commitment: ({ about, outcome }: { about: string; outcome?: string }) => {
             const id = ++seq.current;
+            const startedAt = performance.now();
+            let toolOutcome: LatencyOutcome = "ok";
             setActivity((a) => [...a, { id, label: "closing a commitment" }]);
             void (async () => {
               try {
@@ -1057,6 +1329,7 @@ function VoiceCore({
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) {
+                  toolOutcome = "error";
                   try {
                     conversationRef.current.sendContextualUpdate(
                       data.open?.length
@@ -1070,12 +1343,18 @@ function VoiceCore({
                   } catch {}
                 }
               } catch {
+                toolOutcome = "error";
                 try {
                   conversationRef.current.sendContextualUpdate(
                     "IMPORTANT — closing that commitment FAILED (the engine didn't answer). Tell the user it's still on the books.",
                   );
                 } catch {}
               } finally {
+                recordLatency(
+                  "tool · closing a commitment",
+                  performance.now() - startedAt,
+                  toolOutcome,
+                );
                 setActivity((a) => a.filter((x) => x.id !== id));
               }
             })();
@@ -1090,6 +1369,8 @@ function VoiceCore({
           // that takes four seconds must never cost four seconds of air.
           edit_memory: ({ about, correction }: { about: string; correction: string }) => {
             const id = ++seq.current;
+            const startedAt = performance.now();
+            let toolOutcome: LatencyOutcome = "ok";
             setActivity((a) => [...a, { id, label: "amending a memory" }]);
             pushCard({ id, kind: "filed", status: "loading", text: correction, amended: true, ttl: 8_000 });
             const note = (text: string) => {
@@ -1143,6 +1424,7 @@ function VoiceCore({
                   envelope: e ? toFiled(e) : undefined,
                 });
               } catch (err) {
+                toolOutcome = "error";
                 updateCard(id, { status: "error" });
                 note(
                   `IMPORTANT — that correction FAILED to apply (${
@@ -1150,6 +1432,11 @@ function VoiceCore({
                   }). Tell the user it didn't stick and offer to try again.`,
                 );
               } finally {
+                recordLatency(
+                  "tool · amending a memory",
+                  performance.now() - startedAt,
+                  toolOutcome,
+                );
                 setActivity((a) => a.filter((x) => x.id !== id));
               }
             })();
@@ -1157,8 +1444,7 @@ function VoiceCore({
           },
           get_briefing: () =>
             track("fetching briefing", async () => {
-              const res = await fetch("/api/briefings");
-              const data = await res.json();
+              const data = await turnJson("/api/briefings");
               const latest = data.briefings?.[0];
               return latest?.content ?? "No briefing yet — I haven't dreamed since we last spoke.";
             }),
@@ -1167,7 +1453,7 @@ function VoiceCore({
           // agent structurally cannot read ahead of the screen.
           show_story: ({ topic }: { topic: string }) =>
             track("setting the stage", async () => {
-              const data = await postJson("/api/story", { topic });
+              const data = await turnPostJson("/api/story", { topic });
               const beats = (data.beats ?? []) as StoryBeat[];
               if (beats.length < 2)
                 return `Only ${beats.length} usable ${beats.length === 1 ? "memory" : "memories"} on that — not enough for a tour. Say so in one warm line and offer to just talk about it instead.`;
@@ -1215,8 +1501,10 @@ function VoiceCore({
             }),
           // the agent's own exit: the user said stop, or changed the subject
           end_story: () => {
+            const startedAt = performance.now();
             const wasOpen = !!storyRef.current;
             setStory(null);
+            recordLatency("tool · ending story", performance.now() - startedAt);
             return wasOpen
               ? "The stage is dark — story closed. Back to the conversation, no ceremony."
               : "No story was open.";
@@ -1225,6 +1513,8 @@ function VoiceCore({
           // own provenance — ask again tomorrow and it cites the source
           save_finding: ({ finding, source }: { finding: string; source?: string }) => {
             const id = ++seq.current;
+            const startedAt = performance.now();
+            let outcome: LatencyOutcome = "ok";
             setActivity((a) => [...a, { id, label: "keeping a finding" }]);
             pushCard({ id, kind: "filed", status: "loading", text: finding, ttl: 8_000 });
             const today = new Date().toLocaleDateString("en-CA");
@@ -1238,8 +1528,14 @@ function VoiceCore({
                 }
                 updateCard(id, { status: "ready", text: e.text ?? finding, envelope: toFiled(e) });
               })
-              .catch(() => updateCard(id, { status: "error" }))
-              .finally(() => setActivity((a) => a.filter((x) => x.id !== id)));
+              .catch(() => {
+                outcome = "error";
+                updateCard(id, { status: "error" });
+              })
+              .finally(() => {
+                recordLatency("tool · keeping a finding", performance.now() - startedAt, outcome);
+                setActivity((a) => a.filter((x) => x.id !== id));
+              });
             return "Kept, with its source. Don't announce it — keep the conversation moving.";
           },
           // the inner weather: six weeks of the envelope's emotional
@@ -1249,16 +1545,15 @@ function VoiceCore({
               const id = ++seq.current;
               pushCard({ id, kind: "mood", status: "loading" });
               try {
-                const res = await fetch("/api/mood");
-                if (!res.ok) throw new Error();
-                const data = (await res.json()) as MoodData;
+                const data = (await turnJson("/api/mood")) as MoodData;
                 updateCard(id, { status: "ready", data });
                 return `${data.spoken}${
                   data.brightest ? `\nBrightest day: ${data.brightest.label} — ${data.brightest.why}` : ""
                 }${
                   data.roughest ? `\nRoughest day: ${data.roughest.label} — ${data.roughest.why}` : ""
                 }\nThe seismograph is on screen. Give the read in one or two spoken lines, your voice — name what made the peaks if it lands. Never recite numbers or dates mechanically.`;
-              } catch {
+              } catch (error) {
+                if (error instanceof StaleTurnError) throw error;
                 updateCard(id, { status: "error", error: "the needle isn't answering" });
                 return "The inner-weather read failed. Say so in one short line.";
               }
@@ -1310,8 +1605,9 @@ function VoiceCore({
                 error?: string;
               };
               try {
-                data = await postJson("/api/search", { query, freshness, intent });
-              } catch {
+                data = await turnPostJson("/api/search", { query, freshness, intent });
+              } catch (error) {
+                if (error instanceof StaleTurnError) throw error;
                 updateCard(id, { status: "error", error: "the web didn't answer" });
                 return "The search failed — the web didn't answer. Tell the user briefly and move on.";
               }
@@ -1385,9 +1681,35 @@ function VoiceCore({
   const lastUser = [...lines].reverse().find((l) => l.role === "user");
   const h = new Date().getHours();
   const greeting = h < 5 ? "Still up" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  const latencyRows = showLatency ? latencySummary(latencySamples) : [];
 
   return (
     <>
+      {showLatency && (
+        <aside className="glass pointer-events-none absolute left-5 top-[72px] z-40 max-h-[48vh] w-[min(360px,calc(100vw-40px))] overflow-hidden rounded-2xl border border-white/10 p-4 text-left shadow-2xl">
+          <div className="mb-3 flex items-center justify-between font-mono text-[9px] uppercase tracking-[0.2em] text-zinc-500">
+            <span>live latency</span>
+            <span>{latencySamples.length} samples</span>
+          </div>
+          {latencyRows.length ? (
+            <div className="max-h-[38vh] space-y-1.5 overflow-y-auto pr-1 font-mono text-[10px] text-zinc-400">
+              {latencyRows.map((row) => (
+                <div key={row.name} className="grid grid-cols-[1fr_auto_auto_auto] gap-2 border-t border-white/[0.05] pt-1.5">
+                  <span className="truncate text-zinc-300">{row.name}</span>
+                  <span>p50 {row.p50}</span>
+                  <span>p95 {row.p95}</span>
+                  <span className={row.outcome === "ok" ? "text-emerald-300/70" : "text-amber-300/80"}>
+                    {row.last}ms · {row.count}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="font-mono text-[10px] text-zinc-600">waiting for a voice turn…</p>
+          )}
+        </aside>
+      )}
+
       {/* the orb — dead center of everything, and the only button you need */}
       <div className="pointer-events-none absolute left-1/2 top-[44%] z-10 -translate-x-1/2 -translate-y-1/2">
         <div className="pointer-events-auto">

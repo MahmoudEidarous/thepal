@@ -37,6 +37,7 @@ import { loadRelationshipState } from "./relationship-service";
 export type AttentionCompileInput = CompileContextInput & {
   seenProspective?: string[];
   includeHistory?: boolean;
+  includePins?: boolean;
   includeProspective?: boolean;
   includeObligations?: boolean;
   includeAnniversaries?: boolean;

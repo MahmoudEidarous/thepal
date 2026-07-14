@@ -45,6 +45,7 @@ export async function POST(request: Request) {
         ? body.seenProspective.filter((id: unknown): id is string => typeof id === "string").slice(0, 50)
         : [],
       includeHistory: body.includeHistory !== false,
+      includePins: body.includePins !== false,
       includeProspective: body.includeProspective !== false,
       includeObligations: body.includeObligations !== false,
       includeAnniversaries: body.includeAnniversaries !== false,
