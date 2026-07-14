@@ -196,6 +196,7 @@ function VoiceCore({
   const prospectiveSeenRef = useRef(new Set<string>());
   const contextTurnRef = useRef(0);
   const sessionIdRef = useRef("");
+  const pendingAmbientRef = useRef<string | null>(null);
 
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
@@ -266,6 +267,10 @@ function VoiceCore({
             recentTurns,
             selectedMemory,
             seenProspective: [...prospectiveSeenRef.current],
+            // This pass chooses whether memory should interrupt. Semantic
+            // history is fetched only if the agent actually needs to answer
+            // from memory, avoiding two Supermemory searches for one turn.
+            includeHistory: false,
             includeProspective: prospectiveEnabledRef.current,
             maxTokens: 1_400,
           })
@@ -307,6 +312,13 @@ function VoiceCore({
   useEffect(() => {
     conversationRef.current = conversation;
   }, [conversation]);
+  useEffect(() => {
+    if (!connected || !pendingAmbientRef.current) return;
+    try {
+      conversationRef.current.sendContextualUpdate(pendingAmbientRef.current);
+      pendingAmbientRef.current = null;
+    } catch {}
+  }, [connected]);
   const closeStoryByHand = () => {
     if (!storyRef.current) return;
     setStory(null);
@@ -412,19 +424,37 @@ function VoiceCore({
   }, []);
 
   // Every tool the agent runs shows up as visible activity while it works.
-  // Tools never throw — a thrown client tool tears down the whole session,
-  // so failures are returned to the agent as text it can speak about.
-  const track = useCallback(async (label: string, fn: () => Promise<string>): Promise<string> => {
-    const id = ++seq.current;
-    setActivity((a) => [...a, { id, label }]);
-    try {
-      return await fn();
-    } catch (e) {
-      return `Tool failed: ${e instanceof Error ? e.message : "unknown error"}. Tell the user the memory engine had a problem, then continue.`;
-    } finally {
-      setActivity((a) => a.filter((x) => x.id !== id));
-    }
-  }, []);
+  // A provider may degrade, but the conversation may not freeze with it.
+  // User-approved deletion opts out because waiting for the human is correct.
+  const track = useCallback(
+    async (
+      label: string,
+      fn: () => Promise<string>,
+      responseBudgetMs: number | null = 6_000,
+    ): Promise<string> => {
+      const id = ++seq.current;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      setActivity((a) => [...a, { id, label }]);
+      try {
+        if (responseBudgetMs === null) return await fn();
+        return await Promise.race([
+          fn(),
+          new Promise<string>((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error(`response budget exceeded after ${responseBudgetMs}ms`)),
+              responseBudgetMs,
+            );
+          }),
+        ]);
+      } catch (e) {
+        return `Tool unavailable: ${e instanceof Error ? e.message : "unknown error"}. Acknowledge it briefly and keep the conversation moving; never wait in silence or repeatedly retry.`;
+      } finally {
+        if (timeout) clearTimeout(timeout);
+        setActivity((a) => a.filter((x) => x.id !== id));
+      }
+    },
+    [],
+  );
 
   async function wake() {
     if (connected || status === "connecting") {
@@ -437,11 +467,31 @@ function VoiceCore({
     contextTurnRef.current = 0;
     sessionIdRef.current = crypto.randomUUID();
     try {
-      // agenda + boundaries ride in with the session — the agent knows
-      // what you owe and what it must never suggest, before you speak.
-      // Location + today's sky resolve in the same breath, so "how's the
-      // weather?" costs zero tool calls.
-      const [res, agendaData, pinnedData, briefingData, attentionData, prospectiveData, senses] = await Promise.all([
+      // Agenda + boundaries ride in with the session. Location and weather
+      // get a small startup budget, then arrive as a contextual update rather
+      // than holding the voice connection hostage.
+      const sensesPromise = (async () => {
+        const p = await locate();
+        if (!p) return null;
+        placeRef.current = p;
+        const w = await fetchWeather(p).catch(() => null);
+        return { p, w };
+      })().catch(() => null);
+      const sensesWithinStartBudget = Promise.race([
+        sensesPromise.then((senses) => ({ senses, timedOut: false })),
+        new Promise<{ senses: null; timedOut: true }>((resolve) =>
+          setTimeout(() => resolve({ senses: null, timedOut: true }), 350),
+        ),
+      ]);
+      const [
+        res,
+        agendaData,
+        pinnedData,
+        briefingData,
+        attentionData,
+        prospectiveData,
+        sensed,
+      ] = await Promise.all([
         fetch("/api/voice/signed-url"),
         fetch("/api/agenda")
           .then((r) => (r.ok ? r.json() : { commitments: [] }))
@@ -464,14 +514,9 @@ function VoiceCore({
         fetch("/api/prospective")
           .then((r) => (r.ok ? r.json() : { triggers: [] }))
           .catch(() => ({ triggers: [] })),
-        (async () => {
-          const p = await locate();
-          if (!p) return null;
-          placeRef.current = p;
-          const w = await fetchWeather(p).catch(() => null);
-          return { p, w };
-        })().catch(() => null),
+        sensesWithinStartBudget,
       ]);
+      const senses = sensed.senses;
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "couldn't reach ElevenLabs");
 
@@ -880,6 +925,7 @@ function VoiceCore({
                   topic,
                   action: reminder,
                   source: "recall-voice",
+                  deferProcessing: true,
                 });
                 prospectiveEnabledRef.current = true;
                 updateCard(cardId, {
@@ -939,6 +985,7 @@ function VoiceCore({
                 about,
                 until,
                 reason,
+                deferProcessing: true,
               });
               // Refresh the cheap boolean; lifecycle truth remains server-side.
               const remaining = await fetch("/api/prospective")
@@ -971,7 +1018,7 @@ function VoiceCore({
               if (!approved) return "The user denied the deletion on screen. Nothing was deleted.";
               const res = await postJson("/api/forget", { query: about, dryRun: false });
               return `Deleted ${res.count} memories. They are gone.`;
-            }),
+            }, null),
           get_agenda: () =>
             track("checking the ledger", async () => {
               const res = await fetch("/api/agenda");
@@ -1300,6 +1347,22 @@ function VoiceCore({
             }),
         },
       });
+      if (sensed.timedOut) {
+        void sensesPromise.then((later) => {
+          if (!later) return;
+          const ambientText = `${later.p.city}${
+            later.w ? ` · ${later.w.now.temp}° ${later.w.now.label}` : ""
+          }`;
+          setAmbient(ambientText);
+          pendingAmbientRef.current = `Ambient context arrived after connection: ${later.p.city}${
+            later.p.region ? `, ${later.p.region}` : ""
+          }, ${later.p.country}${later.w ? `. Sky right now — ${weatherOneLiner(later.w)}` : ""}. Use it naturally only when relevant.`;
+          try {
+            conversationRef.current.sendContextualUpdate(pendingAmbientRef.current);
+            pendingAmbientRef.current = null;
+          } catch {}
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "couldn't start the session");
     }

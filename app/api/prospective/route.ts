@@ -48,6 +48,7 @@ export async function POST(request: Request) {
         idempotencyKey:
           request.headers.get("Idempotency-Key") ??
           (typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined),
+        deferProcessing: body.deferProcessing === true,
       });
       invalidateCorpus(space);
       return Response.json(result);
@@ -74,6 +75,7 @@ export async function POST(request: Request) {
         idempotencyKey:
           request.headers.get("Idempotency-Key") ??
           (typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined),
+        deferProcessing: body.deferProcessing === true,
       });
       if (!result) {
         return Response.json({ error: "no open prospective memory matches that" }, { status: 404 });

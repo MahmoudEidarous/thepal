@@ -95,7 +95,10 @@ export async function prospectiveTriggers(
   tag: string,
   options: { includeClosed?: boolean; includeSnoozed?: boolean } = {},
 ): Promise<ProspectiveTrigger[]> {
-  await migrateLegacyProviderTriggers(tag).catch(() => null);
+  // Canonical SQLite is the read authority. Importing provider-only triggers
+  // is compatibility work and must never delay session startup or a tool call.
+  // The attempted set also prevents concurrent reads from starting duplicates.
+  void migrateLegacyProviderTriggers(tag).catch(() => null);
   const ledger = getMemoryEventLedger();
   const space = spaceFromTag(tag);
   rebuildProspective(ledger, "local-user", space);
@@ -115,6 +118,7 @@ export async function createProspectiveTrigger(args: {
   source?: string;
   salience?: number;
   idempotencyKey?: string;
+  deferProcessing?: boolean;
 }) {
   const ledger = getMemoryEventLedger();
   const created = createCanonicalProspective(
@@ -127,6 +131,17 @@ export async function createProspectiveTrigger(args: {
     },
     ledger,
   );
+  if (args.deferProcessing) {
+    // Canonical SQLite truth and the prospective projection already exist.
+    // Enrichment and Supermemory mirroring are durable queue work; voice must
+    // not hold a 3-30 second silence while compatibility infrastructure runs.
+    scheduleMemoryReconciliation(0);
+    return {
+      id: created.trigger.id,
+      status: "pending" as const,
+      trigger: publicTrigger(created.trigger),
+    };
+  }
   const [mirrored] = await Promise.all([
     processCaptureJob(created.job.id, ledger),
     processStateJob(created.stateJob.id, { ledger }),
@@ -165,6 +180,7 @@ export async function updateProspectiveTrigger(args: {
   until?: string;
   reason?: string;
   idempotencyKey?: string;
+  deferProcessing?: boolean;
 }) {
   const ledger = getMemoryEventLedger();
   const space = spaceFromTag(args.tag);
@@ -197,33 +213,47 @@ export async function updateProspectiveTrigger(args: {
     ledger,
   );
   if (!transition) return null;
+  const providerId = transition.before.providerExternalId;
+  const now = transition.event.recordedAt;
+  const patch =
+    args.operation === "snooze"
+      ? {
+          status: "open",
+          triggerSnoozedUntil: transition.trigger.snoozedUntil,
+          triggerLastActionAt: now,
+        }
+      : {
+          status: args.operation === "cancel" ? "cancelled" : "done",
+          completedAt: localToday(),
+          triggerOutcome: transition.trigger.outcome,
+          triggerLastActionAt: now,
+          ...(args.operation === "fire"
+            ? {
+                triggerFiredAt: now,
+                triggerFiredReason:
+                  args.reason?.slice(0, 240) || `topic ${trigger.topic} returned`,
+              }
+            : {}),
+        };
+  if (args.deferProcessing) {
+    // transitionCanonicalProspective synchronously commits and rebuilds the
+    // one-shot lifecycle before this response. Everything below is a mirror
+    // of that truth and may safely finish after the voice continues.
+    scheduleMemoryReconciliation(0);
+    if (providerId) void setLedgerStatus(args.tag, providerId, patch).catch(() => null);
+    return {
+      trigger: publicTrigger(transition.trigger),
+      operation: args.operation,
+      ...(args.operation === "snooze"
+        ? { until: transition.trigger.snoozedUntil }
+        : { on: localToday() }),
+    };
+  }
   const [mirrored] = await Promise.all([
     processCaptureJob(transition.job.id, ledger),
     processStateJob(transition.stateJob.id, { ledger }),
   ]);
-  const providerId = transition.before.providerExternalId;
   if (providerId) {
-    const now = transition.event.recordedAt;
-    const patch =
-      args.operation === "snooze"
-        ? {
-            status: "open",
-            triggerSnoozedUntil: transition.trigger.snoozedUntil,
-            triggerLastActionAt: now,
-          }
-        : {
-            status: args.operation === "cancel" ? "cancelled" : "done",
-            completedAt: localToday(),
-            triggerOutcome: transition.trigger.outcome,
-            triggerLastActionAt: now,
-            ...(args.operation === "fire"
-              ? {
-                  triggerFiredAt: now,
-                  triggerFiredReason:
-                    args.reason?.slice(0, 240) || `topic ${trigger.topic} returned`,
-                }
-              : {}),
-          };
     await setLedgerStatus(args.tag, providerId, patch).catch(() => null);
   }
   if (mirrored.state === "pending" || mirrored.state === "dead") scheduleMemoryReconciliation();
