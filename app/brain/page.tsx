@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Dust, GRAIN } from "@/components/atmosphere";
+import { ContinuityBoard } from "@/components/continuity-board";
 import { ThreadBoard, type ThreadBoardData } from "@/components/thread-board";
 import { profileName, timeAgo } from "@/lib/format";
 import type { MemoryEntry } from "@/lib/memory-types";
+import type { ContinuityExperience } from "@/lib/memory/continuity-view";
 
-type View = "graph" | "people" | "threads" | "ledger" | "captures";
+type View = "graph" | "people" | "threads" | "continuity" | "ledger" | "captures";
 
 type Node = MemoryEntry & {
   x: number;
@@ -248,6 +250,7 @@ export default function Brain() {
   } | null>(null);
   const [captures, setCaptures] = useState<Capture[] | null>(null);
   const [threadData, setThreadData] = useState<ThreadBoardData | null>(null);
+  const [continuityData, setContinuityData] = useState<ContinuityExperience | null>(null);
   const [hintsFor, setHintsFor] = useState<Record<string, string[]>>({});
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [capQ, setCapQ] = useState("");
@@ -263,7 +266,13 @@ export default function Brain() {
   // deep link: /brain?tab=ledger
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    if (t === "ledger" || t === "captures" || t === "people" || t === "threads")
+    if (
+      t === "ledger" ||
+      t === "captures" ||
+      t === "people" ||
+      t === "threads" ||
+      t === "continuity"
+    )
       // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time URL read after hydration
       setView(t);
   }, []);
@@ -304,6 +313,13 @@ export default function Brain() {
       .catch(() => {});
   }, []);
 
+  const loadContinuity = useCallback(() => {
+    fetch("/api/memory/continuity?view=overview")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => data && setContinuityData(data))
+      .catch(() => {});
+  }, []);
+
   // everything loads up front — tab switches are instant, counts are live
   useEffect(() => {
     const load = () =>
@@ -315,16 +331,18 @@ export default function Brain() {
     loadLedger();
     loadCaptures();
     loadThreads();
+    loadContinuity();
     const t = setInterval(() => {
       if (!document.hidden) {
         load();
         loadLedger();
         loadCaptures();
         loadThreads();
+        loadContinuity();
       }
     }, 12_000);
     return () => clearInterval(t);
-  }, [loadLedger, loadCaptures, loadThreads]);
+  }, [loadLedger, loadCaptures, loadThreads, loadContinuity]);
 
   useEffect(() => {
     fetch("/api/profile")
@@ -607,6 +625,12 @@ export default function Brain() {
               ["graph", entries.length],
               ["people", people.length],
               ["threads", threadData?.rollup.active ?? 0],
+              [
+                "continuity",
+                (continuityData?.overview?.routines.routines.length ?? 0) +
+                  (continuityData?.overview?.anniversaries.memories.length ?? 0) +
+                  (continuityData?.overview?.humor.artifacts.length ?? 0),
+              ],
               ["ledger", openCount],
               ["captures", captures?.length ?? 0],
             ] as Array<[View, number]>
@@ -1030,6 +1054,8 @@ export default function Brain() {
       )}
 
       {view === "threads" && <ThreadBoard data={threadData} />}
+
+      {view === "continuity" && <ContinuityBoard data={continuityData} />}
 
       {/* ── ledger ────────────────────────────────────────────── */}
       {view === "ledger" && (

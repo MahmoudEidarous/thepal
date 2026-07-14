@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { returningPast, type Anniversary } from "../fusion";
+import {
+  buildAnniversaryView,
+  type ReturningMemory,
+} from "./continuity-projectors";
 import {
   attentionAuditPayload,
   attentionMode,
@@ -57,7 +60,10 @@ export type AttendedCompiledContext = CompiledContext & {
 };
 
 export type AttentionServiceDependencies = ContextCompilerDependencies & {
-  getAnniversaries?: (space: CompileContextInput["space"], today: string) => Promise<Anniversary[]>;
+  getAnniversaries?: (
+    space: CompileContextInput["space"],
+    today: string,
+  ) => Promise<ReturningMemory[]>;
   mode?: AttentionMode;
   relationshipMode?: RelationshipMode;
   persistDecision?: boolean;
@@ -211,7 +217,9 @@ export async function compileMemoryContextWithAttention(
   const today = input.at ? at.slice(0, 10) : new Date().toLocaleDateString("en-CA");
   const anniversaries = input.includeAnniversaries === false
     ? []
-    : await (dependencies.getAnniversaries ?? returningPast)(input.space, today).catch(() => []);
+    : dependencies.getAnniversaries
+      ? await dependencies.getAnniversaries(input.space, today).catch(() => [])
+      : buildAnniversaryView(ledger, userId, input.space, today).memories;
   const since = new Date(Date.parse(at) - 7 * 86_400_000).toISOString();
   const history = historyFrom(
     ledger.listAttentionDecisions({

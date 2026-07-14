@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import type { Anniversary } from "../fusion";
 import type {
   CompiledContext,
   ContextItem,
   WorkingTurn,
 } from "./context-compiler";
+import type { ReturningMemory } from "./continuity-projectors";
 import type { MemorySpace, Sensitivity, TrustTier } from "./contracts";
 
 export const ATTENTION_ENGINE_VERSION = "attention-v1" as const;
@@ -72,7 +72,7 @@ export type AttentionChange = {
 };
 
 export type AttentionSupplement = {
-  anniversaries?: Array<Anniversary & {
+  anniversaries?: Array<ReturningMemory & {
     trust?: TrustTier | null;
     sensitivity?: Sensitivity;
     evidenceEventIds?: string[];

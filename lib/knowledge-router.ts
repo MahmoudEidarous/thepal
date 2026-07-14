@@ -16,6 +16,7 @@ export type KnowledgeDomain =
   | "general"
   | "agenda"
   | "threads"
+  | "continuity"
   | "prospective"
   | "briefing"
   | "emotional_history"
@@ -33,6 +34,7 @@ export type KnowledgeRetrievalTool =
   | "get_profile"
   | "get_agenda"
   | "get_life_threads"
+  | "get_continuity"
   | "get_prospective_memories"
   | "get_briefing"
   | "get_emotional_weather"
@@ -171,6 +173,67 @@ function baseRoute(input: KnowledgeRouteInput): Omit<KnowledgeRoute, "coverage">
       "current_turn",
       "The referent is already available in the active conversation; do not retrieve it again.",
     );
+  }
+
+  const asksConstellation = has(
+    text,
+    /\b(?:(?:(?:show|take|walk) me through|recap|summarize|how was) (?:my )?(?:(?:this|last) )?(?:week|month)|what changed (?:in|during) (?:my )?(?:(?:this|last) )?(?:week|month)|(?:my|this|last) (?:week|month) (?:in review|recap|summary|constellation)|weekly constellation|monthly (?:constellation|arc))\b/,
+  );
+  if (asksConstellation) {
+    return route("structured_state", "continuity", "The canonical week/month projector owns this continuity view.", {
+      evidenceRequired: true,
+      requiredSources: ["structured_state"],
+      allowedRetrievalTools: ["get_continuity"],
+    });
+  }
+
+  const asksDossier = has(
+    text,
+    /\b(?:what do you know about|what(?:'s| is) going on with|tell me about|show me (?:the )?(?:dossier|history) (?:for|on)|my history with)\s+[^?!.]{2,120}[?!.]?$/,
+  );
+  if (asksDossier) {
+    return route("personal_memory", "continuity", "A living entity dossier should answer before loose episodic recall.", {
+      evidenceRequired: true,
+      requiresEpisodicEvidence: true,
+      requiredSources: ["structured_state", "personal_memory"],
+      allowedRetrievalTools: ["get_continuity", "search_memories"],
+    });
+  }
+
+  const asksRoutines = has(
+    text,
+    /\b(?:what are|show me|have you noticed|do you notice) (?:my )?(?:routines|habits|recurring patterns)|what (?:patterns|routines|habits) (?:do you|have you) (?:see|noticed)|how do i usually\b/,
+  );
+  if (asksRoutines) {
+    return route("structured_state", "continuity", "The routine projector preserves evidence thresholds and uncertainty.", {
+      evidenceRequired: true,
+      requiredSources: ["structured_state"],
+      allowedRetrievalTools: ["get_continuity"],
+    });
+  }
+
+  const asksAnniversaries = has(
+    text,
+    /\b(?:on this day|what happened (?:a year|one year|six months|a month) ago today|anything from (?:this day|a year ago today)|what (?:comes|came) back today|returning past|anniversar(?:y|ies))\b/,
+  );
+  if (asksAnniversaries) {
+    return route("structured_state", "continuity", "The canonical calendar projector owns returning memories.", {
+      evidenceRequired: true,
+      requiredSources: ["structured_state"],
+      allowedRetrievalTools: ["get_continuity"],
+    });
+  }
+
+  const asksSharedHumor = has(
+    text,
+    /\b(?:what are|show me|do we have|remember) (?:any )?(?:our )?(?:inside jokes?|shared jokes?|running jokes?|shared callbacks?|callbacks?)|what jokes? (?:do we share|have we made ours)\b/,
+  );
+  if (asksSharedHumor) {
+    return route("structured_state", "continuity", "The relationship ledger is the authority for earned shared references.", {
+      evidenceRequired: true,
+      requiredSources: ["structured_state"],
+      allowedRetrievalTools: ["get_continuity"],
+    });
   }
 
   const asksThreads = has(

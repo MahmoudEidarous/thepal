@@ -47,8 +47,8 @@
     {
       "name": "prospective and human continuity projections",
       "command": "npm run eval:memory-continuity",
-      "expected": "39 checks passing",
-      "successMarker": "39 memory-continuity checks passed"
+      "expected": "64 checks passing",
+      "successMarker": "64 memory-continuity checks passed"
     },
     {
       "name": "unified attention and intelligent silence",
@@ -77,8 +77,8 @@
     {
       "name": "knowledge source routing and tool authority",
       "command": "npm run eval:knowledge-router",
-      "expected": "186 checks passing",
-      "successMarker": "186 knowledge-router checks passed"
+      "expected": "222 checks passing",
+      "successMarker": "222 knowledge-router checks passed"
     },
     {
       "name": "thread retrieval and product experience",

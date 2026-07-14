@@ -6,6 +6,8 @@ import type {
   LifeThread,
   MemoryEvent,
   MemorySpace,
+  Sensitivity,
+  TrustTier,
   TypedValue,
 } from "./contracts";
 import type { ClaimEvidence, MemoryEventLedger } from "./event-ledger";
@@ -78,6 +80,24 @@ export type RoutineView = {
     lastObservedAt: string | null;
     evidenceEventIds: string[];
   }>;
+  evidenceEventIds: string[];
+  agentText: string;
+  projectorVersion: typeof CONTINUITY_PROJECTOR_VERSION;
+};
+
+export type ReturningMemory = {
+  text: string;
+  when: string;
+  storyDate: string;
+  trust: TrustTier | null;
+  sensitivity: Sensitivity;
+  evidenceEventIds: string[];
+};
+
+export type AnniversaryView = {
+  type: "anniversaries";
+  today: string;
+  memories: ReturningMemory[];
   evidenceEventIds: string[];
   agentText: string;
   projectorVersion: typeof CONTINUITY_PROJECTOR_VERSION;
@@ -199,10 +219,38 @@ export function buildDossier(
     .map((id) => byId.get(id)?.recordedAt ?? "")
     .sort()
     .at(-1) || null;
-  const currentBeliefs = relevantBeliefs.filter((belief) => belief.status === "current");
-  const historicalBeliefs = relevantBeliefs.filter((belief) => belief.status !== "current");
   const activeThreads = relevantThreads.filter((thread) => !["resolved", "dormant"].includes(thread.status));
   const closedThreads = relevantThreads.filter((thread) => ["resolved", "dormant"].includes(thread.status));
+  // Thread reconciliation can conservatively join aliases such as “Meridian” and
+  // “Project Meridian review” even when their raw belief subjects differ. When a
+  // thread has selected a newer belief for the same predicate, that applicable
+  // state wins in the dossier without deleting or rewriting the older evidence.
+  const beliefByKey = new Map(beliefs.map((belief) => [belief.key, belief]));
+  const threadShadowedBeliefKeys = new Set<string>();
+  for (const thread of activeThreads) {
+    const currentKeys = new Set(thread.currentState.beliefKeys);
+    const currentPredicates = new Set(
+      thread.currentState.beliefKeys
+        .map((key) => beliefByKey.get(key)?.predicate)
+        .filter((predicate): predicate is string => Boolean(predicate)),
+    );
+    for (const key of thread.beliefKeys) {
+      const belief = beliefByKey.get(key);
+      if (belief && !currentKeys.has(key) && currentPredicates.has(belief.predicate)) {
+        threadShadowedBeliefKeys.add(key);
+      }
+    }
+  }
+  const currentBeliefs = relevantBeliefs.filter(
+    (belief) => belief.status === "current" && !threadShadowedBeliefKeys.has(belief.key),
+  );
+  const historicalBeliefs = relevantBeliefs
+    .filter((belief) => belief.status !== "current" || threadShadowedBeliefKeys.has(belief.key))
+    .map((belief) =>
+      threadShadowedBeliefKeys.has(belief.key) && belief.status === "current"
+        ? { ...belief, status: "historical" as const }
+        : belief,
+    );
   const commitments = activeThreads.flatMap((thread) => thread.commitments.filter((item) => item.status === "open"));
   const facts = currentBeliefs
     .slice(0, 6)
@@ -245,6 +293,111 @@ function periodRange(period: "week" | "month", at: string) {
 function inRange(value: string, range: { start: string; end: string }) {
   const parsed = Date.parse(value.length === 10 ? `${value}T12:00:00.000Z` : value);
   return Number.isFinite(parsed) && parsed >= Date.parse(range.start) && parsed <= Date.parse(range.end);
+}
+
+// Calendar subtraction must not roll an impossible day into the next month.
+// July 31 therefore has no one-month return in June instead of becoming July 1.
+function monthsBack(today: string, months: number) {
+  const [year, month, day] = today.split("-").map(Number);
+  const value = new Date(Date.UTC(year, month - 1 - months, day));
+  return value.getUTCDate() === day ? value.toISOString().slice(0, 10) : null;
+}
+
+export function buildAnniversaryView(
+  ledger: MemoryEventLedger,
+  userId: string,
+  space: MemorySpace,
+  today = new Date().toISOString().slice(0, 10),
+): AnniversaryView {
+  const safeToday = /^\d{4}-\d{2}-\d{2}$/.test(today)
+    ? today
+    : new Date().toISOString().slice(0, 10);
+  const thisYear = Number(safeToday.slice(0, 4));
+  const monthAndDay = safeToday.slice(5);
+  const monthAgo = monthsBack(safeToday, 1);
+  const sixMonthsAgo = monthsBack(safeToday, 6);
+  const events = new Map(
+    ledger.listActiveEvents(userId, space).map((event) => [event.id, event]),
+  );
+  const byEvent = new Map<
+    string,
+    { memory: ReturningMemory; order: number; recordedAt: string }
+  >();
+
+  for (const evidence of ledger
+    .listClaimEvidence(userId, space)
+    .filter(canProjectClaimEvidence)) {
+    const start = evidence.claim.validTime?.start ?? "";
+    const storyDate = start.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(storyDate) || storyDate >= safeToday) continue;
+    const event = events.get(evidence.claim.eventId);
+    if (!event || event.payload.requested.kind === "commitment") continue;
+    const text = event.payload.content.replace(/\s+/g, " ").trim();
+    if (!text || /^(Done|Cancelled|Canceled):/i.test(text)) continue;
+
+    let when: string | null = null;
+    let order = 0;
+    if (storyDate.slice(5) === monthAndDay) {
+      const years = thisYear - Number(storyDate.slice(0, 4));
+      if (years >= 1) {
+        when = years === 1 ? "a year ago today" : `${years} years ago today`;
+        order = -years;
+      }
+    } else if (sixMonthsAgo === storyDate) {
+      when = "six months ago today";
+      order = 1;
+    } else if (monthAgo === storyDate) {
+      when = "a month ago today";
+      order = 2;
+    }
+    if (!when) continue;
+
+    const candidate = {
+      memory: {
+        text: text.slice(0, 500),
+        when,
+        storyDate,
+        trust: evidence.trust,
+        sensitivity: event.sensitivity,
+        evidenceEventIds: [event.id],
+      },
+      order,
+      recordedAt: event.recordedAt,
+    };
+    const current = byEvent.get(event.id);
+    if (
+      !current ||
+      candidate.order < current.order ||
+      (candidate.order === current.order && candidate.memory.storyDate < current.memory.storyDate)
+    ) {
+      byEvent.set(event.id, candidate);
+    }
+  }
+
+  const memories = [...byEvent.values()]
+    .sort(
+      (left, right) =>
+        left.order - right.order ||
+        left.memory.storyDate.localeCompare(right.memory.storyDate) ||
+        left.recordedAt.localeCompare(right.recordedAt),
+    )
+    .slice(0, 12)
+    .map((item) => item.memory);
+  const evidenceEventIds = memories.flatMap((memory) => memory.evidenceEventIds);
+  const agentText = memories.length
+    ? `${memories.length} grounded memor${memories.length === 1 ? "y returns" : "ies return"} on ${safeToday}. ${memories
+        .slice(0, 3)
+        .map((memory) => `${memory.when}: ${memory.text}`)
+        .join(" | ")}`
+    : `No grounded memory has an exact calendar return on ${safeToday}.`;
+  return {
+    type: "anniversaries",
+    today: safeToday,
+    memories,
+    evidenceEventIds,
+    agentText,
+    projectorVersion: CONTINUITY_PROJECTOR_VERSION,
+  };
 }
 
 export function buildConstellation(

@@ -1459,6 +1459,24 @@ function VoiceCore({
                 : "The life-thread ledger did not return a usable view. Say that honestly and keep moving.";
             });
           },
+          get_continuity: ({
+            view,
+            about,
+          }: {
+            view: "dossier" | "week" | "month" | "routines" | "anniversaries" | "humor";
+            about?: string;
+          }) => {
+            const blocked = gateKnowledgeTool("get_continuity");
+            if (blocked) return Promise.resolve(blocked);
+            return track("reading continuity", async () => {
+              const params = new URLSearchParams({ view });
+              if (about?.trim()) params.set("about", about.trim());
+              const data = await turnJson(`/api/memory/continuity?${params.toString()}`);
+              return typeof data.agentText === "string"
+                ? data.agentText
+                : "The continuity view did not return usable grounded state. Say that honestly; do not fill the gap from imagination.";
+            });
+          },
           // closing a commitment can take seconds (settle-polling a doc
           // that's still filing) — the agent must not hold its breath.
           // Fire, react now, hear back only if the match missed.
@@ -1697,13 +1715,20 @@ function VoiceCore({
               const id = ++seq.current;
               pushCard({ id, kind: "mood", status: "loading" });
               try {
-                const data = (await turnJson("/api/mood")) as MoodData;
-                updateCard(id, { status: "ready", data });
-                return `${data.spoken}${
-                  data.brightest ? `\nBrightest day: ${data.brightest.label} — ${data.brightest.why}` : ""
-                }${
-                  data.roughest ? `\nRoughest day: ${data.roughest.label} — ${data.roughest.why}` : ""
-                }\nThe seismograph is on screen. Give the read in one or two spoken lines, your voice — name what made the peaks if it lands. Never recite numbers or dates mechanically.`;
+                const visual = turnJson("/api/mood") as Promise<MoodData>;
+                const canonical = await turnJson("/api/memory/continuity?view=emotions");
+                void visual
+                  .then((data) => updateCard(id, { status: "ready", data }))
+                  .catch((error) => {
+                    if (!(error instanceof StaleTurnError)) {
+                      updateCard(id, { status: "error", error: "the visual weather is still forming" });
+                    }
+                  });
+                return `${
+                  typeof canonical.agentText === "string"
+                    ? canonical.agentText
+                    : "There is not enough canonical emotional evidence to describe an arc."
+                }\nA secondary seismograph may appear on screen from descriptive envelope signals; it is visual color, not authority. Give the grounded read in one or two spoken lines. Never turn a temporary feeling into a trait or diagnosis.`;
               } catch (error) {
                 if (error instanceof StaleTurnError) throw error;
                 updateCard(id, { status: "error", error: "the needle isn't answering" });

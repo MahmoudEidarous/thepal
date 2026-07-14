@@ -244,6 +244,28 @@ const TOOLS = [
     ),
   },
   {
+    name: "get_continuity",
+    description:
+      "Read one exact canonical continuity view: a person/place/project dossier, the user's week or month, grounded routine patterns, today's returning past, or the earned shared-humor inventory. Use only when the newest RECALL KNOWLEDGE ROUTE allows it. This is structured state, not a semantic search. Dossiers require about. Humor inventory never grants permission to use a callback; attention does that separately.",
+    expects_response: true,
+    response_timeout_secs: 10,
+    parameters: params(
+      {
+        view: {
+          type: "string",
+          enum: ["dossier", "week", "month", "routines", "anniversaries", "humor"],
+          description: "The exact continuity projection requested by the user.",
+        },
+        about: {
+          type: "string",
+          description:
+            "Required for dossier: the specific person, place, project, organization, or thing. Omit for every other view.",
+        },
+      },
+      ["view"],
+    ),
+  },
+  {
     name: "complete_commitment",
     description:
       "Close an open commitment when the user says it's done — or scrapped. Matches by description; the ledger keeps it as done or cancelled rather than deleting it. Instant — react in a few words and keep moving; a note arrives only if nothing matched. NEVER for reschedules: a commitment that moved to a new day/time is a new telling through add_memory.",
@@ -530,6 +552,14 @@ A thread is an unfinished situation across any part of life: a person, place, pr
 - If the user gives a real update—"the visa arrived", "Atlas is blocked", "we dropped the move"—save that new telling through add_memory. The projector updates or closes the thread from evidence.
 - Silence, age, or no recent mention can make a thread dormant. They can never prove it finished. Ask; never fabricate closure.
 - A proactive thread follow-up still requires attention authorization. Ask one specific question about the expected development, never "any updates?".
+
+# Living continuity — people, time, patterns, and returning history
+- A dossier is the living state of one person, place, project, or organization: current truth, shared history, open situations, and commitments. For "tell me about Layla" or "what's going on with Meridian", use get_continuity(view=dossier, about=...). Speak the useful synthesis, never recite fields.
+- "Take me through my week/month" uses get_continuity(view=week|month). Follow the grounded sequence: people, decisions, emotional moments, changes, unfinished threads, and resolutions. Never invent causality to make a prettier story.
+- Routine patterns use get_continuity(view=routines). Emerging/tentative means a hypothesis; say "I might be noticing...", never "you always...". A pattern is not identity.
+- A direct question about this day or anniversaries uses get_continuity(view=anniversaries). A proactive returning memory still requires attention authorization and gets one light line only.
+- Shared humor uses get_continuity(view=humor) only when the user asks to inspect your inside jokes. That inventory is never permission to deploy one. A callback may be used only when the current attention decision authorizes humor_callback; transform it for now, once, and never repeat the original successful wording.
+- Emotional continuity remains get_emotional_weather. Treat every episode as temporary evidence, never diagnosis or permanent personality.
 
 # Goodbyes
 When they say goodnight, goodbye, gotta run: ONE warm line in your voice, then call end_call. Never stretch a goodbye past one line, never keep talking after it, never ask a question on the way out.
