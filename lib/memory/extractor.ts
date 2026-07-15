@@ -7,7 +7,6 @@ import {
   ClaimRelationHintSchema,
   EntityRefSchema,
   MemoryClaimSchema,
-  TimeRangeSchema,
   type Belief,
   type MemoryClaim,
   type MemoryEvent,
@@ -25,6 +24,15 @@ const CandidateValueSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("entity"), value: CandidateEntitySchema }),
 ]);
 
+// Providers occasionally serialize an unknown/open boundary as null. Claims
+// use the stricter canonical TimeRangeSchema, so accept that wire shape here
+// and anchor an unknown start to the evidence recording day during materialization.
+const CandidateTimeRangeSchema = z.object({
+  start: z.string().min(4).max(40).nullable(),
+  end: z.string().min(4).max(40).nullable(),
+  precision: z.enum(["instant", "day", "month", "year", "interval"]),
+});
+
 export const ClaimCandidateSchema = z.object({
   subject: CandidateEntitySchema,
   predicate: z.string().min(1).max(200),
@@ -32,12 +40,23 @@ export const ClaimCandidateSchema = z.object({
   polarity: z.union([z.literal(1), z.literal(-1)]),
   modality: ClaimModalitySchema,
   relationHint: ClaimRelationHintSchema,
-  validTime: TimeRangeSchema.nullable(),
+  validTime: CandidateTimeRangeSchema.nullable(),
   contexts: z.array(z.string().min(1).max(120)).max(20).default([]),
 });
 
 const ClaimExtractionSchema = z.object({
   claims: z.array(ClaimCandidateSchema).max(12),
+});
+
+const BatchClaimExtractionSchema = z.object({
+  events: z
+    .array(
+      z.object({
+        eventId: z.string().uuid(),
+        claims: z.array(ClaimCandidateSchema).max(12),
+      }),
+    )
+    .max(6),
 });
 
 export type ClaimCandidate = z.infer<typeof ClaimCandidateSchema>;
@@ -181,7 +200,13 @@ export function materializeClaimCandidates(
       kind: subjectKind,
       label: candidate.subject.label.trim(),
     };
-    let validTime = candidate.validTime;
+    let validTime = candidate.validTime
+      ? {
+          start: candidate.validTime.start ?? localDay(event.recordedAt),
+          end: candidate.validTime.end,
+          precision: candidate.validTime.precision,
+        }
+      : null;
     if (predicate === "meeting.scheduled_for") {
       validTime = { start: localDay(event.recordedAt), end: null, precision: "day" };
     }
@@ -252,4 +277,55 @@ export async function extractClaimsForEvent(
     abortSignal: AbortSignal.timeout(30_000),
   });
   return materializeClaimCandidates(event, object.claims);
+}
+
+// Archival imports can contain hundreds of already-indexed documents. Running
+// one model request and a full belief/thread replay per document would make a
+// safe migration unnecessarily slow and quadratic. This batches only the
+// evidence-local extraction step; every claim is still materialized and
+// validated against its own canonical event, and projections are rebuilt once
+// after the complete batch has landed.
+export async function extractClaimsForEvents(
+  input: MemoryEvent[],
+): Promise<Map<string, MemoryClaim[]>> {
+  const events = input
+    .filter(
+      (event) =>
+        !event.tombstonedAt &&
+        event.kind !== "deletion" &&
+        event.kind !== "consent" &&
+        !event.payload.prospective,
+    )
+    .slice(0, 6);
+  const result = new Map(input.map((event) => [event.id, [] as MemoryClaim[]]));
+  if (!events.length) return result;
+  const allowed = new Map(events.map((event) => [event.id, event]));
+  const { object } = await generateObject({
+    model: openrouter(MODEL_FLASH, {
+      extraBody: { provider: { sort: "throughput" }, reasoning: { enabled: false } },
+    }),
+    schema: BatchClaimExtractionSchema,
+    system: `${RULES}\n\nThis is an archival batch. Treat each event independently. Never use one event as evidence for another, and return each supplied eventId exactly once even when it has zero claims.`,
+    prompt: JSON.stringify(
+      events.map((event) => ({
+        eventId: event.id,
+        recordedAt: event.recordedAt,
+        localDate: localDay(event.recordedAt),
+        space: event.space,
+        sourceActor: event.source.actor,
+        sourceTrust: event.source.trust,
+        eventKind: event.kind,
+        untrustedMemory: event.payload.content.slice(0, 6_000),
+      })),
+    ),
+    temperature: 0,
+    maxOutputTokens: 10_000,
+    abortSignal: AbortSignal.timeout(60_000),
+  });
+  for (const extracted of object.events) {
+    const event = allowed.get(extracted.eventId);
+    if (!event) continue;
+    result.set(event.id, materializeClaimCandidates(event, extracted.claims));
+  }
+  return result;
 }

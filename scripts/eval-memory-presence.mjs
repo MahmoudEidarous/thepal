@@ -299,7 +299,11 @@ const cached = storePreparedPresence({
   userId: "presence-user",
   space: "eval",
   sessionId: "cached-session",
-  plan: planned,
+  plan: {
+    ...planned,
+    preparedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  },
 });
 check(!!takePreparedPresence(cached.planId), "a prepared opening can be consumed without another LLM call");
 check(takePreparedPresence(cached.planId) === null, "prepared openings are one-shot and cannot leak into another session");

@@ -1531,6 +1531,32 @@ export class MemoryEventLedger {
     return Number(result.changes);
   }
 
+  requeueDeadJobsForSpaces(
+    spaces: MemorySpace[],
+    limit = 10,
+    now = new Date().toISOString(),
+  ): number {
+    const selected = [...new Set(spaces)];
+    if (!selected.length) return 0;
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const placeholders = selected.map(() => "?").join(",");
+    const result = this.database
+      .prepare(`
+        UPDATE memory_jobs
+        SET status = 'pending', attempts = 0, available_at = ?,
+            locked_at = NULL, last_error = NULL, updated_at = ?
+        WHERE id IN (
+          SELECT j.id FROM memory_jobs j
+          JOIN memory_events e ON e.id = j.event_id
+          WHERE j.status = 'dead' AND e.space IN (${placeholders})
+          ORDER BY j.updated_at
+          LIMIT ?
+        )
+      `)
+      .run(now, now, ...selected, safeLimit);
+    return Number(result.changes);
+  }
+
   enqueueStateJob(
     eventId: string,
     kind: MemoryStateJobKind,
@@ -1647,6 +1673,32 @@ export class MemoryEventLedger {
     return Number(result.changes);
   }
 
+  requeueDeadStateJobsForSpaces(
+    spaces: MemorySpace[],
+    limit = 10,
+    now = new Date().toISOString(),
+  ): number {
+    const selected = [...new Set(spaces)];
+    if (!selected.length) return 0;
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const placeholders = selected.map(() => "?").join(",");
+    const result = this.database
+      .prepare(`
+        UPDATE memory_state_jobs
+        SET status = 'pending', attempts = 0, available_at = ?,
+            locked_at = NULL, last_error = NULL, updated_at = ?
+        WHERE id IN (
+          SELECT j.id FROM memory_state_jobs j
+          JOIN memory_events e ON e.id = j.event_id
+          WHERE j.status = 'dead' AND e.space IN (${placeholders})
+          ORDER BY j.updated_at
+          LIMIT ?
+        )
+      `)
+      .run(now, now, ...selected, safeLimit);
+    return Number(result.changes);
+  }
+
   requeueProjectionJobs(
     options: { userId?: string; space?: MemorySpace; now?: string } = {},
   ): number {
@@ -1697,6 +1749,67 @@ export class MemoryEventLedger {
       .run(input.eventId, input.externalId, input.payloadHash, syncedAt);
   }
 
+  // Legacy documents already exist in Supermemory. Adopting that document is
+  // the successful mirror operation; adding it again would create a duplicate.
+  // Keep the mirror row and its transactional job transition atomic so an
+  // interrupted import can be resumed by provider document ID.
+  adoptExistingSupermemoryMirror(input: {
+    eventId: string;
+    externalId: string;
+    payloadHash: string;
+    syncedAt?: string;
+  }) {
+    const event = this.getEvent(input.eventId);
+    if (!event || event.tombstonedAt) {
+      throw new Error(`memory ledger: import event ${input.eventId} is unavailable`);
+    }
+    const syncedAt = input.syncedAt ?? new Date().toISOString();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database
+        .prepare(`
+          INSERT INTO memory_mirrors(
+            event_id, provider, external_id, payload_hash, status, synced_at, last_error
+          ) VALUES (?, 'supermemory', ?, ?, 'synced', ?, NULL)
+          ON CONFLICT(event_id, provider) DO UPDATE SET
+            external_id = excluded.external_id,
+            payload_hash = excluded.payload_hash,
+            status = 'synced',
+            synced_at = excluded.synced_at,
+            last_error = NULL
+        `)
+        .run(input.eventId, input.externalId, input.payloadHash, syncedAt);
+      this.database
+        .prepare(`
+          UPDATE memory_jobs
+          SET status = 'succeeded', locked_at = NULL, last_error = NULL, updated_at = ?
+          WHERE event_id = ? AND kind = 'enrich_and_index'
+        `)
+        .run(syncedAt, input.eventId);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  completeImportedProjection(eventId: string, now = new Date().toISOString()) {
+    const event = this.getEvent(eventId);
+    if (!event || event.tombstonedAt) {
+      throw new Error(`memory ledger: import event ${eventId} is unavailable`);
+    }
+    const result = this.database
+      .prepare(`
+        UPDATE memory_state_jobs
+        SET status = 'succeeded', locked_at = NULL, last_error = NULL, updated_at = ?
+        WHERE event_id = ? AND kind = 'extract_and_project'
+      `)
+      .run(now, eventId);
+    if (Number(result.changes) !== 1) {
+      throw new Error(`memory ledger: import projection job for ${eventId} is missing`);
+    }
+  }
+
   markSupermemoryMirrorDeleted(eventId: string, now = new Date().toISOString()) {
     this.database
       .prepare(`
@@ -1738,6 +1851,106 @@ export class MemoryEventLedger {
           .prepare("SELECT * FROM memory_state_jobs ORDER BY created_at LIMIT ?")
           .all(safeLimit);
     return (rows as SqlRow[]).map(stateJobFromRow);
+  }
+
+  operationalQueueStats(spaces: MemorySpace[]) {
+    const selected = [...new Set(spaces)];
+    if (!selected.length) throw new Error("memory ledger: queue scope cannot be empty");
+    const placeholders = selected.map(() => "?").join(",");
+    const counts = (table: "memory_jobs" | "memory_state_jobs") => {
+      const result: Record<MemoryJobStatus, number> = {
+        pending: 0,
+        processing: 0,
+        succeeded: 0,
+        dead: 0,
+      };
+      const rows = this.database
+        .prepare(`
+          SELECT j.status, COUNT(*) AS count
+          FROM ${table} j
+          JOIN memory_events e ON e.id = j.event_id
+          WHERE e.space IN (${placeholders})
+          GROUP BY j.status
+        `)
+        .all(...selected) as SqlRow[];
+      for (const row of rows) {
+        result[text(row, "status") as MemoryJobStatus] = integer(row, "count");
+      }
+      return result;
+    };
+    return { jobs: counts("memory_jobs"), stateJobs: counts("memory_state_jobs") };
+  }
+
+  listJobsForSpaces(
+    status: MemoryJobStatus,
+    spaces: MemorySpace[],
+    limit = 50,
+  ): MemoryJob[] {
+    const selected = [...new Set(spaces)];
+    if (!selected.length) return [];
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+    const placeholders = selected.map(() => "?").join(",");
+    const rows = this.database
+      .prepare(`
+        SELECT j.* FROM memory_jobs j
+        JOIN memory_events e ON e.id = j.event_id
+        WHERE j.status = ? AND e.space IN (${placeholders})
+        ORDER BY j.created_at LIMIT ?
+      `)
+      .all(status, ...selected, safeLimit) as SqlRow[];
+    return rows.map(jobFromRow);
+  }
+
+  listStateJobsForSpaces(
+    status: MemoryJobStatus,
+    spaces: MemorySpace[],
+    limit = 50,
+  ): MemoryStateJob[] {
+    const selected = [...new Set(spaces)];
+    if (!selected.length) return [];
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+    const placeholders = selected.map(() => "?").join(",");
+    const rows = this.database
+      .prepare(`
+        SELECT j.* FROM memory_state_jobs j
+        JOIN memory_events e ON e.id = j.event_id
+        WHERE j.status = ? AND e.space IN (${placeholders})
+        ORDER BY j.created_at LIMIT ?
+      `)
+      .all(status, ...selected, safeLimit) as SqlRow[];
+    return rows.map(stateJobFromRow);
+  }
+
+  // Evaluation is a quarantined namespace, not user history. Hard reset is
+  // deliberately unavailable for every other space.
+  resetEvaluationSpace() {
+    const eventCount = this.database
+      .prepare("SELECT COUNT(*) AS count FROM memory_events WHERE space = 'eval'")
+      .get() as SqlRow;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.exec(`
+        DELETE FROM memory_deletion_audit
+        WHERE event_id IN (SELECT id FROM memory_events WHERE space = 'eval');
+        DELETE FROM memory_attention_decisions WHERE space = 'eval';
+        DELETE FROM memory_relationship_events WHERE space = 'eval';
+        DELETE FROM memory_prospective_triggers WHERE space = 'eval';
+        DELETE FROM memory_session_handoffs WHERE space = 'eval';
+        DELETE FROM memory_continuity_kernels WHERE space = 'eval';
+        DELETE FROM memory_consolidation_runs WHERE space = 'eval';
+        DELETE FROM memory_associations WHERE space = 'eval';
+        DELETE FROM memory_attention_profiles WHERE space = 'eval';
+        DELETE FROM memory_relationship_state WHERE space = 'eval';
+        DELETE FROM memory_threads WHERE space = 'eval';
+        DELETE FROM memory_beliefs WHERE space = 'eval';
+        DELETE FROM memory_events WHERE space = 'eval';
+      `);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return integer(eventCount, "count");
   }
 
   replaceClaimsForEvent(eventId: string, claims: MemoryClaim[], now = new Date().toISOString()) {

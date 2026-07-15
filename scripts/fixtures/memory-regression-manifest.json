@@ -29,8 +29,8 @@
     {
       "name": "claims and temporal truth",
       "command": "npm run eval:memory-truth",
-      "expected": "49 checks passing",
-      "successMarker": "49 memory-truth checks passed"
+      "expected": "50 checks passing",
+      "successMarker": "50 memory-truth checks passed"
     },
     {
       "name": "living threads and open loops",
@@ -79,6 +79,12 @@
       "command": "npm run eval:memory-presence",
       "expected": "44 checks passing",
       "successMarker": "44 memory-presence checks passed"
+    },
+    {
+      "name": "legacy corpus adoption and integration closure",
+      "command": "npm run eval:memory-legacy",
+      "expected": "36 checks passing",
+      "successMarker": "36 memory-legacy checks passed"
     },
     {
       "name": "memory concurrency and crash recovery",

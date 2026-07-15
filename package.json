@@ -20,11 +20,17 @@
     "eval:memory-learning": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-learning.mjs",
     "eval:memory-kernel": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-kernel.mjs",
     "eval:memory-presence": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-presence.mjs",
+    "eval:memory-legacy": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-legacy.mjs",
     "eval:memory-stress": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning scripts/eval-memory-stress.mjs",
     "eval:memory-hardening": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-hardening.mjs",
     "eval:knowledge-router": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-knowledge-router.mjs",
     "eval:thread-experience": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-thread-experience.mjs",
-    "eval:memory-release": "node scripts/eval-memory-release.mjs"
+    "eval:memory-release": "node scripts/eval-memory-release.mjs",
+    "memory:legacy:dry-run": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/migrate-legacy-memories.ts",
+    "memory:legacy:apply": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/migrate-legacy-memories.ts --apply",
+    "memory:eval:reset": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/reset-eval-memory.mjs",
+    "memory:preflight:runtime": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/memory-preflight.mjs",
+    "memory:preflight": "node scripts/run-memory-preflight.mjs"
   },
   "dependencies": {
     "@ai-sdk/react": "^4.0.20",

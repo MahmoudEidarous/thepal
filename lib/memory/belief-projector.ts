@@ -77,6 +77,18 @@ function isExpired(end: string | null, asOf: string) {
   return !!end && compareAt(end, asOf) > 0;
 }
 
+function closeSegmentAt(segment: Segment, requestedBoundary: string) {
+  // A later telling can retroactively apply before an older telling's valid
+  // start. Preserve a valid, possibly zero-length historical interval rather
+  // than emitting an impossible end-before-start projection. Never extend a
+  // claim that already supplied an earlier applicability end.
+  const boundary =
+    requestedBoundary < segment.validStart ? segment.validStart : requestedBoundary;
+  if (segment.validEnd === null || boundary < segment.validEnd) {
+    segment.validEnd = boundary;
+  }
+}
+
 function trustRank(evidence: ClaimEvidence) {
   switch (evidence.trust) {
     case "user_direct":
@@ -236,7 +248,7 @@ export function projectBeliefs(
         for (const index of current) {
           const previous = segments[index];
           previous.status = "historical";
-          previous.validEnd = start;
+          closeSegmentAt(previous, start);
           previous.systemEnd = evidence.recordedAt;
           for (const prior of previous.claims) {
             addRelation(

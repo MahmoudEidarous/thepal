@@ -222,6 +222,22 @@ export const ProspectiveEvidenceSchema = z.object({
   providerExternalId: z.string().trim().min(1).max(500).nullable().default(null),
 });
 
+// A one-time bridge for memories created before the canonical evidence ledger
+// existed. The complete provider snapshot lives in the private local backup;
+// the event keeps only the provenance fields needed to audit, replay, and
+// idempotently recover the existing mirror without turning provider metadata
+// into user-authored truth.
+export const LegacyImportEvidenceSchema = z.object({
+  provider: z.literal("supermemory"),
+  externalId: z.string().trim().min(1).max(500),
+  originalType: z.string().trim().min(1).max(120),
+  originalProvenance: z.string().trim().min(1).max(120).nullable(),
+  originalStatus: z.string().trim().min(1).max(120).nullable(),
+  originalStoryDate: z.string().trim().min(1).max(80).nullable(),
+  originalEntities: z.string().trim().min(1).max(4_000).nullable(),
+  originalMetadataHash: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
 export const CaptureEvidencePayloadSchema = z.object({
   content: z.string().min(1).max(256_000),
   redacted: z.boolean(),
@@ -231,6 +247,7 @@ export const CaptureEvidencePayloadSchema = z.object({
     due: z.string().max(64).nullable(),
   }),
   prospective: ProspectiveEvidenceSchema.optional(),
+  legacyImport: LegacyImportEvidenceSchema.optional(),
 });
 
 export const ProspectiveMemorySchema = z.object({

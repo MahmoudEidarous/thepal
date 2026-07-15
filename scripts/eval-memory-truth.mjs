@@ -177,6 +177,38 @@ try {
   check(beliefs("current", "preference")[0]?.polarity === -1, "changed preference compiles with negative polarity");
   check(beliefs("historical", "preference")[0]?.polarity === 1, "old preference remains inspectable history");
 
+  const retroOld = append("The retro plan starts on July 13th.", {
+    recordedAt: "2026-07-10T09:00:00.000Z",
+  });
+  fileClaims(retroOld.event, [
+    candidate({
+      subject: { kind: "project", label: "Retro plan" },
+      predicate: "project.status",
+      object: { type: "string", value: "old plan" },
+      validTime: { start: "2026-07-13", end: null, precision: "day" },
+    }),
+  ]);
+  const retroNew = append("Actually the retro plan changed effective July 12th.", {
+    recordedAt: "2026-07-14T11:00:00.000Z",
+  });
+  fileClaims(retroNew.event, [
+    candidate({
+      subject: { kind: "project", label: "Retro plan" },
+      predicate: "project.status",
+      object: { type: "string", value: "new plan" },
+      relationHint: "supersede",
+      validTime: { start: "2026-07-12", end: null, precision: "day" },
+    }),
+  ]);
+  rebuildBeliefs(ledger, "fixture-user", "eval", { asOf: AS_OF });
+  const retroHistory = beliefs("historical", "project.status").find(
+    (belief) => belief.value.value === "old plan",
+  );
+  check(
+    retroHistory?.validTime.start === "2026-07-13" && retroHistory.validTime.end === "2026-07-13",
+    "retroactive correction cannot create an end-before-start belief interval",
+  );
+
   const emotion = append("I'm exhausted by Vienna today.", {
     recordedAt: "2026-07-14T12:00:00.000Z",
   });
