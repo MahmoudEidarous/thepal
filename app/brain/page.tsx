@@ -4,21 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Dust, GRAIN } from "@/components/atmosphere";
 import { ContinuityBoard } from "@/components/continuity-board";
+import { LifeGraphView } from "@/components/life-graph";
 import { ThreadBoard, type ThreadBoardData } from "@/components/thread-board";
 import { profileName, timeAgo } from "@/lib/format";
-import type { MemoryEntry } from "@/lib/memory-types";
 import type { ContinuityExperience } from "@/lib/memory/continuity-view";
 
 type View = "graph" | "people" | "threads" | "continuity" | "ledger" | "captures";
-
-type Node = MemoryEntry & {
-  x: number;
-  y: number;
-  r: number;
-  color: string;
-  label: string;
-  degree: number;
-};
 
 type LedgerItem = {
   id: string;
@@ -57,137 +48,6 @@ const TYPE_COLORS: Record<string, string> = {
   impression: "#A78BFA",
   memory: "#8B96B3",
 };
-
-const STOP = new Set(
-  "the a an is are was were to of in on for and or at with from by has have had will would that this his her their my its user user's currently recently".split(
-    " ",
-  ),
-);
-
-// A name for the node: prefer proper nouns, fall back to content words.
-function nodeLabel(text: string): string {
-  const tokens = text.replace(/[^\w\s'&-]/g, " ").split(/\s+/).filter(Boolean);
-  const proper = tokens.filter(
-    (w, i) => i > 0 && /^[A-Z0-9]/.test(w) && !STOP.has(w.toLowerCase()),
-  );
-  const content = tokens.filter((w) => !STOP.has(w.toLowerCase()));
-  const pick = (proper.length ? proper : content).slice(0, 2).join(" ");
-  return (pick || text.slice(0, 14)).toUpperCase();
-}
-
-function nodeColor(e: MemoryEntry): string {
-  if (e.isInference) return "#A78BFA";
-  if (e.history.length > 0) return "#EF7FB4";
-  if (e.isStatic) return "#EFD98B";
-  return "#6C9BF0";
-}
-
-function jitter(id: string, salt = 0): number {
-  let h = salt;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return (Math.abs(h) % 1000) / 1000;
-}
-
-// The graph settles in a synchronous force simulation — ~60 nodes, a few
-// hundred iterations, well under a frame's budget. Deterministic.
-function layout(entries: MemoryEntry[], w: number, h: number) {
-  const nodes = entries.slice(0, 60).map((e, i) => {
-    const a = i * 2.399963 + jitter(e.id) * 0.8;
-    const r0 = 100 + 28 * Math.sqrt(i + 1) + jitter(e.id, 3) * 40;
-    return {
-      ...e,
-      x: Math.cos(a) * r0,
-      y: Math.sin(a) * r0,
-      r: 0,
-      color: nodeColor(e),
-      label: nodeLabel(e.memory),
-      degree: 0,
-    } as Node;
-  });
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-
-  const edges: Array<{ a: Node; b: Node; kind: string }> = [];
-  nodes.forEach((n) => {
-    Object.entries(n.memoryRelations ?? {}).forEach(([t, kind]) => {
-      const other = byId.get(t);
-      if (other) edges.push({ a: n, b: other, kind });
-    });
-  });
-  edges.forEach((e) => {
-    e.a.degree++;
-    e.b.degree++;
-  });
-  nodes.forEach((n) => {
-    n.r =
-      11 +
-      Math.min(15, n.degree * 5 + (n.history.length > 0 ? 4 : 0) + (n.isStatic ? 3 : 0));
-  });
-
-  const anchors = nodes.filter((n) => n.isStatic);
-
-  for (let iter = 0; iter < 380; iter++) {
-    const heat = 1 - iter / 380;
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const a = nodes[i];
-        const b = nodes[j];
-        let dx = a.x - b.x;
-        let dy = a.y - b.y;
-        const d2 = dx * dx + dy * dy || 1;
-        const d = Math.sqrt(d2);
-        const min = a.r + b.r + 74;
-        const f = Math.min(6, (3200 / d2) * heat + (d < min ? (min - d) * 0.12 : 0));
-        dx /= d;
-        dy /= d;
-        a.x += dx * f;
-        a.y += dy * f;
-        b.x -= dx * f;
-        b.y -= dy * f;
-      }
-    }
-    for (const e of edges) {
-      const dx = e.b.x - e.a.x;
-      const dy = e.b.y - e.a.y;
-      const d = Math.hypot(dx, dy) || 1;
-      const f = (d - 180) * 0.02 * heat;
-      e.a.x += (dx / d) * f;
-      e.a.y += (dy / d) * f;
-      e.b.x -= (dx / d) * f;
-      e.b.y -= (dy / d) * f;
-    }
-    for (const n of nodes) {
-      const g = anchors.includes(n) ? 0.03 : 0.008;
-      n.x -= n.x * g * heat;
-      n.y -= n.y * g * heat;
-      // you sit at the origin — nothing gets to sit on top of you
-      const d = Math.hypot(n.x, n.y) || 1;
-      const clear = anchors.includes(n) ? 84 : 132;
-      if (d < clear) {
-        n.x *= clear / d;
-        n.y *= clear / d;
-      }
-    }
-  }
-
-  const xs = nodes.map((n) => n.x);
-  const ys = nodes.map((n) => n.y);
-  const minX = Math.min(0, ...xs);
-  const maxX = Math.max(0, ...xs);
-  const minY = Math.min(0, ...ys);
-  const maxY = Math.max(0, ...ys);
-  const scale = Math.min(
-    (w - 200) / Math.max(1, maxX - minX),
-    (h - 240) / Math.max(1, maxY - minY),
-    1.15,
-  );
-  const cx = w / 2 - ((minX + maxX) / 2) * scale;
-  const cy = (h + 30) / 2 - ((minY + maxY) / 2) * scale;
-  nodes.forEach((n) => {
-    n.x = n.x * scale + cx;
-    n.y = n.y * scale + cy;
-  });
-  return { nodes, edges, center: { x: cx, y: cy } };
-}
 
 // ── dates, the human way ──────────────────────────────────────────
 
@@ -237,12 +97,8 @@ const DUE_TONE: Record<string, string> = {
 
 export default function Brain() {
   const [view, setView] = useState<View>("graph");
-  const [entries, setEntries] = useState<MemoryEntry[]>([]);
-  const [selected, setSelected] = useState<Node | null>(null);
-  const [hoverId, setHoverId] = useState<string | null>(null);
-  const [q, setQ] = useState("");
+  const [graphCount, setGraphCount] = useState(0);
   const [profileLines, setProfileLines] = useState<string[]>([]);
-  const [box, setBox] = useState({ w: 1280, h: 800 });
   const [ledger, setLedger] = useState<{
     open: LedgerItem[];
     done: LedgerItem[];
@@ -275,13 +131,6 @@ export default function Brain() {
     )
       // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time URL read after hydration
       setView(t);
-  }, []);
-
-  useEffect(() => {
-    const measure = () => setBox({ w: window.innerWidth, h: window.innerHeight });
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
   }, []);
 
   const loadLedger = useCallback(() => {
@@ -320,21 +169,15 @@ export default function Brain() {
       .catch(() => {});
   }, []);
 
-  // everything loads up front — tab switches are instant, counts are live
+  // Everything loads up front — tab switches are instant, counts are live.
+  // The graph owns its focused canonical + semantic request separately.
   useEffect(() => {
-    const load = () =>
-      fetch("/api/feed")
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => d && setEntries(d.entries ?? []))
-        .catch(() => {});
-    load();
     loadLedger();
     loadCaptures();
     loadThreads();
     loadContinuity();
     const t = setInterval(() => {
       if (!document.hidden) {
-        load();
         loadLedger();
         loadCaptures();
         loadThreads();
@@ -398,21 +241,6 @@ export default function Brain() {
     const m = (doc?.content ?? "").match(/\(answers: ([\s\S]*?)\)\s*$/);
     setHintsFor((h) => ({ ...h, [c.id]: m ? m[1].split(" · ") : [] }));
   }
-
-  const { nodes, edges, center } = useMemo(
-    () => layout(entries, box.w, box.h),
-    [entries, box],
-  );
-
-  const query = q.trim().toLowerCase();
-  const matches = (n: Node) =>
-    !query || n.memory.toLowerCase().includes(query) || n.label.toLowerCase().includes(query);
-  const connected = (n: Node) =>
-    !!hoverId &&
-    edges.some(
-      (e) =>
-        (e.a.id === hoverId && e.b.id === n.id) || (e.b.id === hoverId && e.a.id === n.id),
-    );
 
   // ── ledger groups ────────────────────────────────────────────────
   const groups = useMemo(() => {
@@ -597,7 +425,7 @@ export default function Brain() {
   }, [selPerson, ledger]);
 
   return (
-    <div className="relative h-dvh overflow-hidden" onClick={() => setSelected(null)}>
+    <div className="relative h-dvh overflow-hidden">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_640px_at_50%_45%,rgb(84_104_255/0.08),transparent_70%)]"
@@ -619,10 +447,10 @@ export default function Brain() {
           <span className="inline-block size-[5px] rounded-full bg-blue-400" />
         </Link>
 
-        <nav className="glass-chip flex max-w-[calc(100vw-120px)] items-center gap-1 overflow-x-auto rounded-full p-1">
+        <nav className="glass-chip flex max-w-[calc(100vw-120px)] items-center gap-1 overflow-x-auto rounded-full p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {(
             [
-              ["graph", entries.length],
+              ["graph", graphCount],
               ["people", people.length],
               ["threads", threadData?.rollup.active ?? 0],
               [
@@ -673,204 +501,7 @@ export default function Brain() {
       </header>
 
       {/* ── graph ─────────────────────────────────────────────── */}
-      {view === "graph" && (
-        <>
-          <div className="absolute inset-x-0 top-[72px] z-30 flex justify-center">
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="search your memory"
-              className="glass-chip h-9 w-72 rounded-full px-4 text-center text-[13px] text-zinc-100 transition-all placeholder:text-zinc-600 focus:border-white/25"
-              onClick={(e) => e.stopPropagation()}
-            />
-          </div>
-
-          <svg className="absolute inset-0 h-full w-full" aria-hidden>
-            {/* orbit rings around you */}
-            {[150, 280, 410].map((r) => (
-              <circle
-                key={r}
-                cx={center.x}
-                cy={center.y}
-                r={r}
-                fill="none"
-                stroke="rgba(255,255,255,0.035)"
-                strokeWidth="1"
-                strokeDasharray="1 7"
-              />
-            ))}
-            {edges.map((e, i) => {
-              const lit = hoverId && (e.a.id === hoverId || e.b.id === hoverId);
-              return (
-                <line
-                  key={i}
-                  x1={e.a.x}
-                  y1={e.a.y}
-                  x2={e.b.x}
-                  y2={e.b.y}
-                  stroke={
-                    e.kind === "updates"
-                      ? `rgba(244,114,140,${lit ? 0.8 : 0.4})`
-                      : `rgba(150,163,255,${lit ? 0.7 : 0.32})`
-                  }
-                  strokeWidth={lit ? 2 : 1.3}
-                />
-              );
-            })}
-            {nodes
-              .filter((n) => n.isStatic)
-              .map((n) => (
-                <line
-                  key={n.id}
-                  x1={center.x}
-                  y1={center.y}
-                  x2={n.x}
-                  y2={n.y}
-                  stroke="rgba(239,217,139,0.16)"
-                  strokeWidth="1"
-                />
-              ))}
-          </svg>
-
-          {/* you, at the center of it all */}
-          <div
-            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2"
-            style={{ left: center.x, top: center.y }}
-          >
-            <div className="flex flex-col items-center gap-2.5">
-              <span className="block size-[26px] rotate-45 rounded-[6px] bg-amber-200 shadow-[0_0_28px_4px_rgb(253_230_138/0.35)]" />
-              <span className="rounded-md bg-black/55 px-2 py-0.5 font-mono text-[11px] tracking-[0.25em] text-amber-100">
-                {name}
-              </span>
-            </div>
-          </div>
-
-          {nodes.map((n) => {
-            const isSel = selected?.id === n.id;
-            const lit = n.id === hoverId || connected(n);
-            const dim = query ? !matches(n) : hoverId ? !lit : false;
-            return (
-              <button
-                key={n.id}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  setSelected(isSel ? null : n);
-                }}
-                onMouseEnter={() => setHoverId(n.id)}
-                onMouseLeave={() => setHoverId(null)}
-                className="group absolute z-10 -translate-x-1/2 -translate-y-1/2 outline-none transition-opacity duration-300"
-                style={{ left: n.x, top: n.y, opacity: dim ? 0.12 : 1 }}
-              >
-                <span className="node-in flex flex-col items-center gap-1.5">
-                  <span
-                    className={
-                      "block rounded-full transition-transform duration-300 group-hover:scale-110 " +
-                      (isSel ? "scale-110" : "")
-                    }
-                    style={{
-                      width: n.r * 2,
-                      height: n.r * 2,
-                      background: `radial-gradient(circle at 35% 30%, ${n.color}F2, ${n.color}CC 70%, ${n.color}99)`,
-                      boxShadow: `0 0 0 3px ${n.color}22, 0 0 ${isSel || lit ? 30 : 16}px ${isSel || lit ? 5 : 2}px ${n.color}${isSel || lit ? "66" : "30"}, inset 0 1px 0 rgb(255 255 255 / 0.4)`,
-                    }}
-                  />
-                  <span
-                    className={
-                      "max-w-[150px] truncate rounded-md bg-black/55 px-1.5 py-0.5 font-mono text-[10.5px] tracking-[0.1em] transition-colors " +
-                      (isSel || lit
-                        ? "text-white"
-                        : "text-zinc-400 group-hover:text-zinc-100")
-                    }
-                  >
-                    {n.label}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-
-          {selected && (
-            <aside
-              onClick={(e) => e.stopPropagation()}
-              className="glass animate-rise absolute bottom-6 right-6 z-40 w-[min(88vw,380px)] rounded-3xl p-6"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.28em] text-zinc-500">
-                  <span
-                    aria-hidden
-                    className="size-[7px] rounded-full"
-                    style={{
-                      background: selected.color,
-                      boxShadow: `0 0 10px 1px ${selected.color}66`,
-                    }}
-                  />
-                  {selected.isInference
-                    ? "inferred"
-                    : selected.isStatic
-                      ? "identity"
-                      : selected.history.length
-                        ? "evolved"
-                        : "memory"}
-                  {selected.version > 1 ? ` · v${selected.version}` : ""} ·{" "}
-                  {timeAgo(selected.updatedAt)}
-                </p>
-                <button
-                  onClick={() => setSelected(null)}
-                  aria-label="Close"
-                  className="-mr-1 -mt-1 px-1 text-[13px] leading-none text-zinc-500 transition-colors hover:text-zinc-200"
-                >
-                  ✕
-                </button>
-              </div>
-              <p className="mt-3 text-[14.5px] leading-relaxed text-zinc-100">
-                {selected.memory}
-              </p>
-              {selected.history.length > 0 && (
-                <div className="mt-4 flex flex-col gap-2 border-t border-white/[0.06] pt-4">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-600">
-                    how it evolved
-                  </p>
-                  {selected.history
-                    .slice()
-                    .sort((a, b) => b.version - a.version)
-                    .map((h) => (
-                      <p
-                        key={h.id}
-                        className="text-[13px] leading-relaxed text-zinc-500 line-through decoration-zinc-600"
-                      >
-                        {h.memory}
-                      </p>
-                    ))}
-                </div>
-              )}
-            </aside>
-          )}
-
-          <div className="glass-chip pointer-events-none absolute bottom-6 left-6 z-30 flex flex-col gap-2 rounded-2xl px-4 py-3 text-[11px] text-zinc-400">
-            {(
-              [
-                ["#6C9BF0", "remembered"],
-                ["#EF7FB4", "changed its mind"],
-                ["#A78BFA", "figured out on its own"],
-                ["#EFD98B", "who you are"],
-              ] as const
-            ).map(([c, t]) => (
-              <span key={t} className="flex items-center gap-2">
-                <span
-                  className="size-[8px] rounded-full"
-                  style={{ background: c, boxShadow: `0 0 8px 1px ${c}55` }}
-                />
-                {t}
-              </span>
-            ))}
-            {entries.length > 60 && (
-              <span className="pt-0.5 text-[10px] text-zinc-600">
-                newest 60 of {entries.length}
-              </span>
-            )}
-          </div>
-        </>
-      )}
+      {view === "graph" && <LifeGraphView name={name} onCount={setGraphCount} />}
 
       {/* ── people & places — a page for everyone you mention ─── */}
       {view === "people" && (

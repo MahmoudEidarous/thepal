@@ -109,6 +109,12 @@
       "command": "npm run eval:thread-experience",
       "expected": "32 checks passing",
       "successMarker": "32 thread-experience checks passed"
+    },
+    {
+      "name": "bounded canonical life graph and semantic discovery",
+      "command": "npm run eval:life-graph",
+      "expected": "27 checks passing",
+      "successMarker": "27 life-graph checks passed"
     }
   ]
 }

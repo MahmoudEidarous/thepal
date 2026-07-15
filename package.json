@@ -25,6 +25,7 @@
     "eval:memory-hardening": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-hardening.mjs",
     "eval:knowledge-router": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-knowledge-router.mjs",
     "eval:thread-experience": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-thread-experience.mjs",
+    "eval:life-graph": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-life-graph.mjs",
     "eval:memory-release": "node scripts/eval-memory-release.mjs",
     "memory:legacy:dry-run": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/migrate-legacy-memories.ts",
     "memory:legacy:apply": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/migrate-legacy-memories.ts --apply",
