@@ -229,7 +229,12 @@ export function runMemoryConsolidation(options: {
     at,
   });
   ledger.replaceAssociations(userId, options.space, associations, at);
-  const completedAt = new Date(Math.max(Date.now(), Date.parse(at))).toISOString();
+  ledger.invalidateContinuityKernel(userId, options.space, at);
+  // `at` is the consolidation clock. Tests, backfills, and deletion replay
+  // deliberately provide a logical instant; mixing it with wall time makes
+  // later replay evidence look older than the last run and incorrectly skips
+  // consolidation. Production omits `at`, so this is still real wall time.
+  const completedAt = at;
   const run: MemoryConsolidationRun = {
     id: randomUUID(),
     userId,

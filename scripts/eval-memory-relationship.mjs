@@ -89,7 +89,7 @@ function eventInput(kind, payload, overrides = {}) {
 
 let ledger = new MemoryEventLedger({ databasePath });
 try {
-  check(ledger.stats().schemaVersion === 7, "schema migration 7 preserves relationship memory");
+  check(ledger.stats().schemaVersion === 8, "schema migration 8 preserves relationship memory");
   check(relationshipMode(undefined) === "guarded", "relationship expression defaults to guarded rollout");
   check(relationshipMode("invalid") === "guarded", "invalid relationship rollout fails closed");
   check(relationshipMode("shadow") === "shadow", "relationship shadow mode is selectable");

@@ -13,7 +13,6 @@ import {
 import { MemoryEventLedger } from "../lib/memory/event-ledger.ts";
 import {
   learnedAttentionBoost,
-  projectAttentionLearningProfile,
   projectMemoryAssociations,
 } from "../lib/memory/learning-engine.ts";
 import {
@@ -152,7 +151,7 @@ function attentionContext(prospective) {
 }
 
 try {
-  check(ledger.stats().schemaVersion === 7, "schema migration 7 installs the learning ledger");
+  check(ledger.stats().schemaVersion === 8, "schema migration 8 preserves the learning ledger");
   check(ledger.stats().attentionOutcomes === 0, "outcomes begin empty");
   check(ledger.stats().associations === 0, "association projections begin empty");
   check(ledger.stats().consolidationRuns === 0, "consolidation audit begins empty");

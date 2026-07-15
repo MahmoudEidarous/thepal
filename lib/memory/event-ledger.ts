@@ -41,7 +41,7 @@ function sqliteConstructor(): SqliteModule["DatabaseSync"] {
 }
 
 const CONTRACT_VERSION = 1 as const;
-const SCHEMA_VERSION = 7 as const;
+const SCHEMA_VERSION = 8 as const;
 const MAX_JOB_ATTEMPTS = 5;
 const PROCESSING_JOB_KIND = "enrich_and_index" as const;
 
@@ -208,6 +208,55 @@ export type MemoryConsolidationRun = {
   idempotencyKey: string;
 };
 
+export type SessionHandoffSummary = {
+  turnCount: number;
+  userTurnCount: number;
+  topics: string[];
+  recentUserStatements: string[];
+  lastAgentStatement: string | null;
+  unresolvedConversation: string | null;
+  meaningfulReasons: string[];
+};
+
+export type MemorySessionHandoff = {
+  id: string;
+  userId: string;
+  space: MemorySpace;
+  sessionId: string;
+  startedAt: string;
+  endedAt: string;
+  meaningfulScore: number;
+  meaningful: boolean;
+  summary: SessionHandoffSummary;
+  evidenceEventIds: string[];
+  relationshipEventIds: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ContinuityKernelManifest = {
+  contractVersion: 1;
+  sectionCounts: Record<string, number>;
+  evidenceEventIds: string[];
+  relationshipEventIds: string[];
+  handoffIds: string[];
+  omittedItems: number;
+  targetTokens: number;
+  hardMaxTokens: number;
+};
+
+export type MemoryContinuityKernel = {
+  userId: string;
+  space: MemorySpace;
+  kernelVersion: string;
+  sourceRevision: string;
+  compiledText: string;
+  manifest: ContinuityKernelManifest;
+  tokenCount: number;
+  compiledAt: string;
+  invalidatedAt: string | null;
+};
+
 export type TombstoneResult = {
   event: MemoryEvent;
   mirror: MemoryMirror | null;
@@ -250,6 +299,8 @@ export type LedgerStats = {
   attentionProfiles: number;
   associations: number;
   consolidationRuns: number;
+  sessionHandoffs: number;
+  continuityKernels: number;
   relationshipEvents: number;
   relationshipStates: number;
   mirrors: number;
@@ -641,6 +692,43 @@ const MIGRATION_7 = `
     ON memory_consolidation_runs(user_id, space, completed_at DESC);
 `;
 
+const MIGRATION_8 = `
+  CREATE TABLE IF NOT EXISTS memory_session_handoffs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    session_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT NOT NULL,
+    meaningful_score REAL NOT NULL CHECK (meaningful_score >= 0),
+    meaningful INTEGER NOT NULL CHECK (meaningful IN (0,1)),
+    summary_json TEXT NOT NULL CHECK (json_valid(summary_json)),
+    evidence_event_ids_json TEXT NOT NULL CHECK (json_valid(evidence_event_ids_json)),
+    relationship_event_ids_json TEXT NOT NULL CHECK (json_valid(relationship_event_ids_json)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, space, session_id)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_session_handoffs_scope_time
+    ON memory_session_handoffs(user_id, space, ended_at DESC, id DESC);
+  CREATE INDEX IF NOT EXISTS memory_session_handoffs_meaningful
+    ON memory_session_handoffs(user_id, space, meaningful, ended_at DESC);
+
+  CREATE TABLE IF NOT EXISTS memory_continuity_kernels (
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    kernel_version TEXT NOT NULL,
+    source_revision TEXT NOT NULL,
+    compiled_text TEXT NOT NULL,
+    manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+    token_count INTEGER NOT NULL CHECK (token_count >= 0 AND token_count <= 5000),
+    compiled_at TEXT NOT NULL,
+    invalidated_at TEXT,
+    PRIMARY KEY(user_id, space)
+  ) STRICT;
+`;
+
 function text(row: SqlRow, key: string): string {
   const value = row[key];
   if (typeof value !== "string") throw new Error(`memory ledger: ${key} is not text`);
@@ -935,6 +1023,38 @@ function consolidationRunFromRow(row: SqlRow): MemoryConsolidationRun {
   };
 }
 
+function sessionHandoffFromRow(row: SqlRow): MemorySessionHandoff {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    space: text(row, "space") as MemorySpace,
+    sessionId: text(row, "session_id"),
+    startedAt: text(row, "started_at"),
+    endedAt: text(row, "ended_at"),
+    meaningfulScore: Number(row.meaningful_score),
+    meaningful: integer(row, "meaningful") === 1,
+    summary: JSON.parse(text(row, "summary_json")) as SessionHandoffSummary,
+    evidenceEventIds: JSON.parse(text(row, "evidence_event_ids_json")) as string[],
+    relationshipEventIds: JSON.parse(text(row, "relationship_event_ids_json")) as string[],
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function continuityKernelFromRow(row: SqlRow): MemoryContinuityKernel {
+  return {
+    userId: text(row, "user_id"),
+    space: text(row, "space") as MemorySpace,
+    kernelVersion: text(row, "kernel_version"),
+    sourceRevision: text(row, "source_revision"),
+    compiledText: text(row, "compiled_text"),
+    manifest: JSON.parse(text(row, "manifest_json")) as ContinuityKernelManifest,
+    tokenCount: integer(row, "token_count"),
+    compiledAt: text(row, "compiled_at"),
+    invalidatedAt: nullableText(row, "invalidated_at"),
+  };
+}
+
 function mirrorFromRow(row: SqlRow): MemoryMirror {
   return {
     eventId: text(row, "event_id"),
@@ -1101,6 +1221,23 @@ export class MemoryEventLedger {
         throw error;
       }
     }
+    if (current < 8) {
+      const now = new Date().toISOString();
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(MIGRATION_8);
+        this.database
+          .prepare(
+            "INSERT OR IGNORE INTO memory_schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+          )
+          .run(8, "session handoffs and materialized continuity kernel", now);
+        this.database.exec("PRAGMA user_version = 8");
+        this.database.exec("COMMIT");
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    }
   }
 
   close() {
@@ -1208,6 +1345,13 @@ export class MemoryEventLedger {
           ) VALUES (?, ?, 'extract_and_project', 'pending', 0, ?, NULL, NULL, ?, ?)
         `)
         .run(stateJobId, eventId, recordedAt, recordedAt, recordedAt);
+      this.database
+        .prepare(`
+          UPDATE memory_continuity_kernels
+          SET invalidated_at = ?
+          WHERE user_id = ? AND space = ?
+        `)
+        .run(recordedAt, input.userId, input.space);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -2067,6 +2211,13 @@ export class MemoryEventLedger {
         "INSERT INTO memory_relationship_evidence(relationship_event_id, event_id) VALUES (?, ?)",
       );
       for (const eventId of evidenceEventIds) link.run(id, eventId);
+      this.database
+        .prepare(`
+          UPDATE memory_continuity_kernels
+          SET invalidated_at = ?
+          WHERE user_id = ? AND space = ?
+        `)
+        .run(occurredAt, input.userId, input.space);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -2176,6 +2327,23 @@ export class MemoryEventLedger {
       this.database
         .prepare("DELETE FROM memory_attention_profiles WHERE user_id = ? AND space = ?")
         .run(event.userId, event.space);
+      this.database
+        .prepare(`
+          DELETE FROM memory_session_handoffs
+          WHERE id IN (
+            SELECT h.id
+            FROM memory_session_handoffs h, json_each(h.relationship_event_ids_json) j
+            WHERE j.value = ?
+          )
+        `)
+        .run(id);
+      this.database
+        .prepare(`
+          UPDATE memory_continuity_kernels
+          SET invalidated_at = ?
+          WHERE user_id = ? AND space = ?
+        `)
+        .run(new Date().toISOString(), event.userId, event.space);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -2527,6 +2695,156 @@ export class MemoryEventLedger {
     );
   }
 
+  upsertSessionHandoff(
+    handoff: Omit<MemorySessionHandoff, "id" | "createdAt" | "updatedAt"> & { id?: string },
+    now = new Date().toISOString(),
+  ): MemorySessionHandoff {
+    const evidenceEventIds = [...new Set(handoff.evidenceEventIds)].sort();
+    const relationshipEventIds = [...new Set(handoff.relationshipEventIds)].sort();
+    for (const eventId of evidenceEventIds) {
+      const event = this.getEvent(eventId);
+      if (!event || event.tombstonedAt || event.userId !== handoff.userId || event.space !== handoff.space) {
+        throw new Error(`memory ledger: handoff evidence ${eventId} is unavailable`);
+      }
+    }
+    for (const relationshipEventId of relationshipEventIds) {
+      const event = this.getRelationshipEvent(relationshipEventId);
+      if (!event || event.userId !== handoff.userId || event.space !== handoff.space) {
+        throw new Error(`memory ledger: handoff relationship evidence ${relationshipEventId} is unavailable`);
+      }
+    }
+    const id = handoff.id ?? randomUUID();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database
+        .prepare(`
+          INSERT INTO memory_session_handoffs(
+            id, user_id, space, session_id, started_at, ended_at,
+            meaningful_score, meaningful, summary_json,
+            evidence_event_ids_json, relationship_event_ids_json,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(user_id, space, session_id) DO UPDATE SET
+            started_at = excluded.started_at,
+            ended_at = excluded.ended_at,
+            meaningful_score = excluded.meaningful_score,
+            meaningful = excluded.meaningful,
+            summary_json = excluded.summary_json,
+            evidence_event_ids_json = excluded.evidence_event_ids_json,
+            relationship_event_ids_json = excluded.relationship_event_ids_json,
+            updated_at = excluded.updated_at
+        `)
+        .run(
+          id,
+          handoff.userId,
+          handoff.space,
+          handoff.sessionId,
+          handoff.startedAt,
+          handoff.endedAt,
+          handoff.meaningfulScore,
+          handoff.meaningful ? 1 : 0,
+          JSON.stringify(handoff.summary),
+          JSON.stringify(evidenceEventIds),
+          JSON.stringify(relationshipEventIds),
+          now,
+          now,
+        );
+      this.database
+        .prepare(`
+          UPDATE memory_continuity_kernels
+          SET invalidated_at = ?
+          WHERE user_id = ? AND space = ?
+        `)
+        .run(now, handoff.userId, handoff.space);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    const row = this.database
+      .prepare(
+        "SELECT * FROM memory_session_handoffs WHERE user_id = ? AND space = ? AND session_id = ?",
+      )
+      .get(handoff.userId, handoff.space, handoff.sessionId) as SqlRow | undefined;
+    if (!row) throw new Error("memory ledger: session handoff vanished after upsert");
+    return sessionHandoffFromRow(row);
+  }
+
+  listSessionHandoffs(options: {
+    userId?: string;
+    space: MemorySpace;
+    meaningfulOnly?: boolean;
+    since?: string;
+    limit?: number;
+  }): MemorySessionHandoff[] {
+    const conditions = ["user_id = ?", "space = ?"];
+    const values: Array<string | number> = [options.userId ?? "local-user", options.space];
+    if (options.meaningfulOnly) conditions.push("meaningful = 1");
+    if (options.since) {
+      conditions.push("ended_at >= ?");
+      values.push(options.since);
+    }
+    values.push(Math.max(1, Math.min(100, Math.floor(options.limit ?? 20))));
+    return (this.database
+      .prepare(`
+        SELECT * FROM memory_session_handoffs
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY ended_at DESC, id DESC
+        LIMIT ?
+      `)
+      .all(...values) as SqlRow[]).map(sessionHandoffFromRow);
+  }
+
+  replaceContinuityKernel(kernel: MemoryContinuityKernel): MemoryContinuityKernel {
+    this.database
+      .prepare(`
+        INSERT INTO memory_continuity_kernels(
+          user_id, space, kernel_version, source_revision, compiled_text,
+          manifest_json, token_count, compiled_at, invalidated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        ON CONFLICT(user_id, space) DO UPDATE SET
+          kernel_version = excluded.kernel_version,
+          source_revision = excluded.source_revision,
+          compiled_text = excluded.compiled_text,
+          manifest_json = excluded.manifest_json,
+          token_count = excluded.token_count,
+          compiled_at = excluded.compiled_at,
+          invalidated_at = NULL
+      `)
+      .run(
+        kernel.userId,
+        kernel.space,
+        kernel.kernelVersion,
+        kernel.sourceRevision,
+        kernel.compiledText,
+        JSON.stringify(kernel.manifest),
+        kernel.tokenCount,
+        kernel.compiledAt,
+      );
+    return this.getContinuityKernel(kernel.userId, kernel.space)!;
+  }
+
+  getContinuityKernel(userId: string, space: MemorySpace): MemoryContinuityKernel | null {
+    const row = this.database
+      .prepare("SELECT * FROM memory_continuity_kernels WHERE user_id = ? AND space = ?")
+      .get(userId, space) as SqlRow | undefined;
+    return row ? continuityKernelFromRow(row) : null;
+  }
+
+  invalidateContinuityKernel(
+    userId: string,
+    space: MemorySpace,
+    at = new Date().toISOString(),
+  ) {
+    return this.database
+      .prepare(`
+        UPDATE memory_continuity_kernels
+        SET invalidated_at = ?
+        WHERE user_id = ? AND space = ?
+      `)
+      .run(at, userId, space).changes;
+  }
+
   attentionDecisionCountForEvent(eventId: string): number {
     const row = this.database
       .prepare(
@@ -2716,6 +3034,16 @@ export class MemoryEventLedger {
         .run(event.userId, event.space);
       this.database
         .prepare(`
+          DELETE FROM memory_session_handoffs
+          WHERE id IN (
+            SELECT h.id
+            FROM memory_session_handoffs h, json_each(h.evidence_event_ids_json) j
+            WHERE j.value = ?
+          )
+        `)
+        .run(eventId);
+      this.database
+        .prepare(`
           UPDATE memory_jobs
           SET status = 'succeeded', locked_at = NULL,
               last_error = NULL, updated_at = ?
@@ -2748,6 +3076,13 @@ export class MemoryEventLedger {
       this.database
         .prepare("UPDATE memory_deletion_consents SET used_at = ? WHERE token = ?")
         .run(now, token);
+      this.database
+        .prepare(`
+          UPDATE memory_continuity_kernels
+          SET invalidated_at = ?
+          WHERE user_id = ? AND space = ?
+        `)
+        .run(now, event.userId, event.space);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -2807,6 +3142,8 @@ export class MemoryEventLedger {
       attentionProfiles: count("memory_attention_profiles"),
       associations: count("memory_associations"),
       consolidationRuns: count("memory_consolidation_runs"),
+      sessionHandoffs: count("memory_session_handoffs"),
+      continuityKernels: count("memory_continuity_kernels"),
       relationshipEvents: count("memory_relationship_events"),
       relationshipStates: count("memory_relationship_state"),
       mirrors: count("memory_mirrors"),

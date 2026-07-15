@@ -331,8 +331,69 @@ function VoiceCore({
   } | null>(null);
   const sessionStartAtRef = useRef<number | null>(null);
   const sessionIdRef = useRef("");
+  const sessionStartedAtIsoRef = useRef<string | null>(null);
+  const sessionFinalizedRef = useRef(true);
+  const continuityKernelRef = useRef<string | null>(null);
   const pendingAmbientRef = useRef<string | null>(null);
   const pendingAttentionOutcomeRef = useRef<PendingAttentionOutcome | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/memory/kernel")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (active && typeof data?.agentText === "string") {
+          continuityKernelRef.current = data.agentText;
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const finalizeSessionHandoff = useCallback(() => {
+    const sessionId = sessionIdRef.current;
+    const startedAt = sessionStartedAtIsoRef.current;
+    if (!sessionId || !startedAt || sessionFinalizedRef.current) return;
+    sessionFinalizedRef.current = true;
+    const payload = {
+      sessionId,
+      startedAt,
+      endedAt: new Date().toISOString(),
+      lines: linesRef.current.slice(-40),
+    };
+    void postJson("/api/memory/session", payload)
+      .then((data) => {
+        if (typeof data?.kernel?.compiledText === "string") {
+          continuityKernelRef.current = data.kernel.compiledText;
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const onPageHide = () => {
+      const sessionId = sessionIdRef.current;
+      const startedAt = sessionStartedAtIsoRef.current;
+      if (!sessionId || !startedAt || sessionFinalizedRef.current) return;
+      sessionFinalizedRef.current = true;
+      const body = JSON.stringify({
+        sessionId,
+        startedAt,
+        endedAt: new Date().toISOString(),
+        lines: linesRef.current.slice(-40),
+      });
+      try {
+        navigator.sendBeacon(
+          "/api/memory/session",
+          new Blob([body], { type: "application/json" }),
+        );
+      } catch {}
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
 
   const finishAttentionOutcome = useCallback(
     (
@@ -773,10 +834,13 @@ function VoiceCore({
   // a story doesn't outlive its narrator — clear it when the session ends
   const wasConnected = useRef(false);
   useEffect(() => {
-    if (wasConnected.current && !connected) setStory(null);
+    if (wasConnected.current && !connected) {
+      setStory(null);
+      finalizeSessionHandoff();
+    }
     wasConnected.current = connected;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setStory writes state and refs only
-  }, [connected]);
+  }, [connected, finalizeSessionHandoff]);
 
   // the agent sees what you're looking at: clicking a star mid-session
   // tells it, so "what about this one?" just works
@@ -1009,6 +1073,8 @@ function VoiceCore({
     beginUserTurn();
     sessionStartAtRef.current = performance.now();
     sessionIdRef.current = crypto.randomUUID();
+    sessionStartedAtIsoRef.current = new Date().toISOString();
+    sessionFinalizedRef.current = false;
     // A bounded deterministic "sleep" pass refreshes rebuildable learning
     // projections at most once every six hours. It never blocks voice startup.
     void postJson("/api/memory/consolidate", { trigger: "session" }).catch(() => {});
@@ -1036,6 +1102,7 @@ function VoiceCore({
         briefingData,
         attentionData,
         prospectiveData,
+        kernelData,
         sensed,
       ] = await Promise.all([
         fetch("/api/voice/signed-url"),
@@ -1060,6 +1127,14 @@ function VoiceCore({
         fetch("/api/prospective")
           .then((r) => (r.ok ? r.json() : { triggers: [] }))
           .catch(() => ({ triggers: [] })),
+        // Revalidate the local projection for every session. The eager page
+        // prefetch makes this a cheap materialized-row read in the common
+        // case; its cached value is only the failure fallback.
+        fetch("/api/memory/kernel")
+          .then((r) =>
+            r.ok ? r.json() : { agentText: continuityKernelRef.current ?? "" },
+          )
+          .catch(() => ({ agentText: continuityKernelRef.current ?? "" })),
         sensesWithinStartBudget,
       ]);
       const senses = sensed.senses;
@@ -1129,6 +1204,11 @@ function VoiceCore({
               }`,
           )
           .join("\n") || "none";
+      const continuityKernel =
+        typeof kernelData.agentText === "string" && kernelData.agentText.trim()
+          ? kernelData.agentText
+          : "RECALL CONTINUITY KERNEL unavailable for this opening. Do not invent prior-life facts; use canonical retrieval only when the turn requires it.";
+      continuityKernelRef.current = continuityKernel;
 
       // where they are + today's sky, carried in the agent's pocket
       const placeText = senses?.p
@@ -1236,6 +1316,7 @@ function VoiceCore({
           anniversaries: annivText,
           prospective: prospectiveText,
           attention: attentionText,
+          continuity_kernel: continuityKernel,
           knowledge_route:
             "No active user turn yet. Wait for the newest RECALL KNOWLEDGE ROUTE block before using a retrieval tool.",
           place: placeText,

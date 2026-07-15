@@ -69,6 +69,12 @@
       "successMarker": "55 memory-learning checks passed"
     },
     {
+      "name": "materialized continuity kernel and session bridge",
+      "command": "npm run eval:memory-kernel",
+      "expected": "56 checks passing",
+      "successMarker": "56 memory-kernel checks passed"
+    },
+    {
       "name": "memory concurrency and crash recovery",
       "command": "npm run eval:memory-stress",
       "expected": "12 checks passing",

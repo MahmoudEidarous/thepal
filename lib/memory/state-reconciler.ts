@@ -117,6 +117,7 @@ async function processClaimedStateJob(
       const threadProjection = rebuildThreads(ledger, event.userId, event.space, { asOf });
       const prospectiveProjection = rebuildProspective(ledger, event.userId, event.space);
       ledger.markStateJobSucceeded(job.id);
+      ledger.invalidateContinuityKernel(event.userId, event.space);
       return {
         state: "succeeded",
         kind: job.kind,
@@ -143,6 +144,7 @@ async function processClaimedStateJob(
     const threadProjection = rebuildThreads(ledger, event.userId, event.space, { asOf });
     const prospectiveProjection = rebuildProspective(ledger, event.userId, event.space);
     ledger.markStateJobSucceeded(job.id);
+    ledger.invalidateContinuityKernel(event.userId, event.space);
     return {
       state: "succeeded",
       kind: job.kind,
