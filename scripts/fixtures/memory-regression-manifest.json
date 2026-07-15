@@ -63,6 +63,12 @@
       "successMarker": "82 memory-relationship checks passed"
     },
     {
+      "name": "outcome learning, associations, and consolidation",
+      "command": "npm run eval:memory-learning",
+      "expected": "55 checks passing",
+      "successMarker": "55 memory-learning checks passed"
+    },
+    {
       "name": "memory concurrency and crash recovery",
       "command": "npm run eval:memory-stress",
       "expected": "12 checks passing",

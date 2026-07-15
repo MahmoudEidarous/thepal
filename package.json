@@ -17,6 +17,7 @@
     "eval:memory-continuity": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-continuity.mjs",
     "eval:memory-attention": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-attention.mjs",
     "eval:memory-relationship": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-relationship.mjs",
+    "eval:memory-learning": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-learning.mjs",
     "eval:memory-stress": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning scripts/eval-memory-stress.mjs",
     "eval:memory-hardening": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-memory-hardening.mjs",
     "eval:knowledge-router": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning node_modules/jiti/lib/jiti-cli.mjs scripts/eval-knowledge-router.mjs",

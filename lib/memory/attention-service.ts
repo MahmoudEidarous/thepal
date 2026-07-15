@@ -36,6 +36,7 @@ import {
   type RelationshipState,
 } from "./relationship-engine";
 import { loadRelationshipState } from "./relationship-service";
+import { readAttentionLearningProfile } from "./learning-service";
 
 export type AttentionCompileInput = CompileContextInput & {
   seenProspective?: string[];
@@ -230,6 +231,7 @@ export async function compileMemoryContextWithAttention(
       limit: 500,
     }),
   );
+  const learningProfile = readAttentionLearningProfile({ ledger, userId, space: input.space, at });
   const decision = decideAttention({
     mode: dependencies.mode ?? attentionMode(),
     moment: {
@@ -252,6 +254,7 @@ export async function compileMemoryContextWithAttention(
       callbacks: eligibleRelationshipCallbacks(relationshipState, at),
     },
     history,
+    learningProfile,
   });
   if (dependencies.persistDecision !== false) {
     recordAttentionDecision(ledger, userId, input.space, decision);

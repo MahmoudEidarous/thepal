@@ -298,26 +298,60 @@ function EmotionPanel({ view }: { view: NonNullable<NonNullable<ContinuityExperi
 }
 
 function RoutinePanel({ view }: { view: NonNullable<NonNullable<ContinuityExperience["overview"]>["routines"]> }) {
-  return view.routines.length ? (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {view.routines.map((routine) => (
-        <article key={`${routine.entity.id}:${routine.pattern}`} className="rounded-3xl border border-white/[0.08] bg-white/[0.028] p-5">
-          <div className="flex items-center gap-2">
-            <span className={`size-[6px] rounded-full ${routine.status === "open" ? "bg-emerald-300/70" : "bg-violet-300/65"}`} />
-            <h2 className="text-[14px] font-medium text-zinc-200">{routine.entity.label}</h2>
-            <span className="ml-auto font-mono text-[8px] uppercase tracking-[0.14em] text-zinc-700">{routine.status}</span>
+  if (!view.routines.length && !view.associations.length) {
+    return <Empty>No recurring pattern has enough grounded evidence to present yet.</Empty>;
+  }
+  return (
+    <div className="flex flex-col gap-5">
+      {!!view.routines.length && (
+        <div>
+          <SectionTitle count={view.routines.length}>explicit routines</SectionTitle>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {view.routines.map((routine) => (
+              <article key={`${routine.entity.id}:${routine.pattern}`} className="rounded-3xl border border-white/[0.08] bg-white/[0.028] p-5">
+                <div className="flex items-center gap-2">
+                  <span className={`size-[6px] rounded-full ${routine.status === "open" ? "bg-emerald-300/70" : "bg-violet-300/65"}`} />
+                  <h2 className="text-[14px] font-medium text-zinc-200">{routine.entity.label}</h2>
+                  <span className="ml-auto font-mono text-[8px] uppercase tracking-[0.14em] text-zinc-700">{routine.status}</span>
+                </div>
+                <p className="mt-3 text-[12.5px] leading-relaxed text-zinc-400">{routine.pattern}</p>
+                <div className="mt-4 flex items-center gap-3 font-mono text-[8.5px] uppercase tracking-[0.12em] text-zinc-700">
+                  <span>{routine.observations} observations</span>
+                  <span>{routine.confidence}</span>
+                  {routine.lastObservedAt && <span className="ml-auto normal-case tracking-normal">{dateLabel(routine.lastObservedAt)}</span>}
+                </div>
+              </article>
+            ))}
           </div>
-          <p className="mt-3 text-[12.5px] leading-relaxed text-zinc-400">{routine.pattern}</p>
-          <div className="mt-4 flex items-center gap-3 font-mono text-[8.5px] uppercase tracking-[0.12em] text-zinc-700">
-            <span>{routine.observations} observations</span>
-            <span>{routine.confidence}</span>
-            {routine.lastObservedAt && <span className="ml-auto normal-case tracking-normal">{dateLabel(routine.lastObservedAt)}</span>}
+        </div>
+      )}
+      {!!view.associations.length && (
+        <div>
+          <SectionTitle count={view.associations.length}>emerging associations</SectionTitle>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {view.associations.map((association) => (
+              <article key={association.id} className="rounded-3xl border border-cyan-200/[0.09] bg-cyan-200/[0.025] p-5">
+                <div className="flex items-center gap-2">
+                  <span className={`size-[6px] rounded-full ${association.status === "active" ? "bg-cyan-300/75" : "bg-zinc-700"}`} />
+                  <h2 className="text-[14px] font-medium text-zinc-200">{association.subject.label}</h2>
+                  <span className="ml-auto font-mono text-[8px] uppercase tracking-[0.14em] text-zinc-700">{association.status}</span>
+                </div>
+                <p className="mt-3 text-[12.5px] leading-relaxed text-zinc-400">
+                  associated with <span className="text-zinc-300">{association.outcomeValue}</span>
+                </p>
+                <div className="mt-4 flex items-center gap-3 font-mono text-[8.5px] uppercase tracking-[0.12em] text-zinc-700">
+                  <span>{association.observations} episodes</span>
+                  <span>{Math.round(association.confidence * 100)}%</span>
+                  <span className="ml-auto normal-case tracking-normal">{dateLabel(association.lastObservedAt)}</span>
+                </div>
+              </article>
+            ))}
           </div>
-        </article>
-      ))}
-      <p className="col-span-full mt-2 text-center text-[10.5px] text-zinc-700">Emerging patterns stay hypotheses until repeated evidence promotes them.</p>
+        </div>
+      )}
+      <p className="text-center text-[10.5px] text-zinc-700">Associations are non-causal hypotheses, never permanent traits. Repetition strengthens them; time and deletion can weaken or remove them.</p>
     </div>
-  ) : <Empty>No routine has enough grounded evidence to present yet.</Empty>;
+  );
 }
 
 function AnniversaryPanel({ view }: { view: NonNullable<NonNullable<ContinuityExperience["overview"]>["anniversaries"]> }) {

@@ -46,8 +46,11 @@ function requireFields(input: RelationshipEventInput) {
   if (input.kind === "boundary" && !payload.rule) {
     throw new Error("relationship event: boundary requires payload.rule");
   }
-  if (input.kind === "interaction_feedback" && (!payload.dimension || !payload.direction)) {
-    throw new Error("relationship event: interaction_feedback requires dimension and direction");
+  if (
+    input.kind === "interaction_feedback" &&
+    ((!payload.dimension || !payload.direction) && (!payload.targetId || !payload.outcome))
+  ) {
+    throw new Error("relationship event: interaction_feedback requires a dialect direction or a targeted outcome");
   }
   if (input.kind === "repair_outcome" && !payload.repairOutcome) {
     throw new Error("relationship event: repair_outcome requires payload.repairOutcome");
@@ -141,6 +144,12 @@ function requireValidTransition(input: RelationshipEventInput, state: Relationsh
           (artifact.cooldownUntil && artifact.cooldownUntil > occurredAt)))
     ) {
       throw new Error("relationship event: callback requires an eligible shared reference outside cooldown");
+    }
+  }
+  if (input.kind === "interaction_feedback" && payload.targetId && payload.outcome) {
+    const artifact = state.humor.find((item) => item.id === payload.targetId);
+    if (!artifact) {
+      throw new Error("relationship event: targeted feedback requires the matching humor artifact");
     }
   }
 }

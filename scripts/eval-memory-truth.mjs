@@ -76,7 +76,7 @@ function beliefs(status, predicate) {
 }
 
 try {
-  check(ledger.stats().schemaVersion === 6, "truth tables remain active under schema migration 6");
+  check(ledger.stats().schemaVersion === 7, "truth tables remain active under schema migration 7");
 
   const viennaOld = append("The Vienna call is on July 27th.", {
     recordedAt: "2026-07-11T09:00:00.000Z",
@@ -355,7 +355,7 @@ try {
   );
   ledger.close();
   ledger = new MemoryEventLedger({ databasePath });
-  check(ledger.stats().schemaVersion === 6, "schema version survives restart");
+  check(ledger.stats().schemaVersion === 7, "schema version survives restart");
   check(ledger.listClaimEvidence("fixture-user", "eval").length === evidence.length, "claims survive restart");
   check(
     ledger.listBeliefs({ userId: "fixture-user", space: "eval", limit: 500 }).length === replayA.beliefs.length,

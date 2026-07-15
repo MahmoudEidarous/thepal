@@ -31,6 +31,28 @@ type LatencySample = {
   outcome: LatencyOutcome;
 };
 
+type AttentionOutcomeSignal =
+  | "engaged"
+  | "laughter"
+  | "silence"
+  | "ignored"
+  | "interrupted"
+  | "dismissed"
+  | "resolved"
+  | "explicit_positive"
+  | "explicit_negative";
+
+type PendingAttentionOutcome = {
+  decisionId: string;
+  candidateKind: string;
+  candidateText: string;
+  turn: number;
+  delivered: boolean;
+  assumeNextAgentDelivery: boolean;
+  createdAt: number;
+  silenceTimer: ReturnType<typeof setTimeout> | null;
+};
+
 class StaleTurnError extends Error {
   constructor() {
     super("the user started a newer turn");
@@ -61,6 +83,48 @@ function latencySummary(samples: LatencySample[]) {
       outcome: group[group.length - 1].outcome,
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function meaningfulWords(value: string) {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 2),
+  );
+}
+
+function textOverlap(left: string, right: string) {
+  const a = meaningfulWords(left);
+  const b = meaningfulWords(right);
+  return [...a].filter((word) => b.has(word)).length / Math.max(1, Math.min(a.size, b.size));
+}
+
+function classifyAttentionReply(message: string, pending: PendingAttentionOutcome): {
+  signal: AttentionOutcomeSignal;
+  source: "system_observed" | "user_explicit";
+} {
+  const text = message.trim().toLowerCase();
+  if (/\b(haha+|hehe+|lol|lmao|that(?:'s| is) funny)\b|\[laugh/i.test(text)) {
+    return { signal: "laughter", source: "system_observed" };
+  }
+  if (/\b(don'?t bring that up|stop bringing|not now|leave it|drop it|i don'?t care)\b/i.test(text)) {
+    return { signal: "dismissed", source: "system_observed" };
+  }
+  if (/\b(that was helpful|good reminder|glad you remembered|thanks for remembering)\b/i.test(text)) {
+    return { signal: "explicit_positive", source: "user_explicit" };
+  }
+  if (/\b(that was annoying|bad reminder|you shouldn'?t have brought|don'?t do that again)\b/i.test(text)) {
+    return { signal: "explicit_negative", source: "user_explicit" };
+  }
+  if (/\b(done|handled|resolved|finished|sorted|already did it)\b/i.test(text)) {
+    return { signal: "resolved", source: "system_observed" };
+  }
+  if (textOverlap(message, pending.candidateText) >= 0.2) {
+    return { signal: "engaged", source: "system_observed" };
+  }
+  return { signal: "ignored", source: "system_observed" };
 }
 
 // what /api/capture and /api/amend hand back for the filed card
@@ -268,6 +332,70 @@ function VoiceCore({
   const sessionStartAtRef = useRef<number | null>(null);
   const sessionIdRef = useRef("");
   const pendingAmbientRef = useRef<string | null>(null);
+  const pendingAttentionOutcomeRef = useRef<PendingAttentionOutcome | null>(null);
+
+  const finishAttentionOutcome = useCallback(
+    (
+      pending: PendingAttentionOutcome,
+      signal: AttentionOutcomeSignal,
+      source: "system_observed" | "user_explicit" = "system_observed",
+    ) => {
+      if (pendingAttentionOutcomeRef.current !== pending || !pending.delivered) return;
+      if (pending.silenceTimer) clearTimeout(pending.silenceTimer);
+      pendingAttentionOutcomeRef.current = null;
+      void postJson("/api/attention/outcomes", {
+        decisionId: pending.decisionId,
+        signal,
+        source,
+        occurredAt: new Date().toISOString(),
+        idempotencyKey: `${pending.decisionId}:${signal}:${pending.turn}`,
+      }).catch(() => {});
+    },
+    [],
+  );
+
+  const registerAttentionSurface = useCallback(
+    (
+      attention: unknown,
+      turn: number,
+      assumeNextAgentDelivery = false,
+    ) => {
+      if (!attention || typeof attention !== "object") return null;
+      const decision = attention as {
+        id?: unknown;
+        surface?: { kind?: unknown; text?: unknown; metadata?: Record<string, unknown> } | null;
+      };
+      if (typeof decision.id !== "string" || !decision.surface || typeof decision.surface.kind !== "string") {
+        return null;
+      }
+      const prior = pendingAttentionOutcomeRef.current;
+      if (prior?.silenceTimer) clearTimeout(prior.silenceTimer);
+      const metadataText = decision.surface.metadata
+        ? Object.values(decision.surface.metadata).filter((value) => typeof value === "string").join(" ")
+        : "";
+      const pending: PendingAttentionOutcome = {
+        decisionId: decision.id,
+        candidateKind: decision.surface.kind,
+        candidateText: `${typeof decision.surface.text === "string" ? decision.surface.text : ""} ${metadataText}`.trim(),
+        turn,
+        delivered: false,
+        assumeNextAgentDelivery,
+        createdAt: performance.now(),
+        silenceTimer: null,
+      };
+      pendingAttentionOutcomeRef.current = pending;
+      return pending;
+    },
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      const pendingOutcome = pendingAttentionOutcomeRef.current;
+      if (pendingOutcome?.silenceTimer) clearTimeout(pendingOutcome.silenceTimer);
+    },
+    [],
+  );
 
   const recordLatency = useCallback(
     (name: string, ms: number, outcome: LatencyOutcome = "ok") => {
@@ -401,6 +529,14 @@ function VoiceCore({
         // actually is — queued chapters must not light over them
         clearStoryFlips();
         if (message.trim()) {
+          const pendingOutcome = pendingAttentionOutcomeRef.current;
+          if (pendingOutcome?.delivered) {
+            const classified = classifyAttentionReply(message, pendingOutcome);
+            finishAttentionOutcome(pendingOutcome, classified.signal, classified.source);
+          } else if (pendingOutcome) {
+            if (pendingOutcome.silenceTimer) clearTimeout(pendingOutcome.silenceTimer);
+            pendingAttentionOutcomeRef.current = null;
+          }
           const transcriptAt = performance.now();
           const turn = beginUserTurn();
           const lastVoiceAt = lastUserVoiceAtRef.current;
@@ -441,6 +577,7 @@ function VoiceCore({
                 | { kind?: string; sourceItemId?: string }
                 | null
                 | undefined;
+              registerAttentionSurface(data.attention, turn);
               if (surfaced?.kind === "prospective" && surfaced.sourceItemId) {
                 prospectiveSeenRef.current.add(surfaced.sourceItemId);
               }
@@ -454,6 +591,19 @@ function VoiceCore({
         }
       } else {
         lastAgentLine.current = message;
+        const pendingOutcome = pendingAttentionOutcomeRef.current;
+        if (
+          pendingOutcome &&
+          !pendingOutcome.delivered &&
+          performance.now() - pendingOutcome.createdAt < 30_000 &&
+          (pendingOutcome.assumeNextAgentDelivery || textOverlap(message, pendingOutcome.candidateText) >= 0.12)
+        ) {
+          pendingOutcome.delivered = true;
+          pendingOutcome.silenceTimer = setTimeout(
+            () => finishAttentionOutcome(pendingOutcome, "silence"),
+            20_000,
+          );
+        }
       }
       const nextLines = [...linesRef.current.slice(-30), { role, text: message }];
       linesRef.current = nextLines;
@@ -485,6 +635,8 @@ function VoiceCore({
       bargeInRef.current = true;
       duckedRef.current = true;
       clearStoryFlips();
+      const pendingOutcome = pendingAttentionOutcomeRef.current;
+      if (pendingOutcome?.delivered) finishAttentionOutcome(pendingOutcome, "interrupted");
       try {
         conversationRef.current.setVolume({ volume: 0.01 });
       } catch {}
@@ -857,6 +1009,9 @@ function VoiceCore({
     beginUserTurn();
     sessionStartAtRef.current = performance.now();
     sessionIdRef.current = crypto.randomUUID();
+    // A bounded deterministic "sleep" pass refreshes rebuildable learning
+    // projections at most once every six hours. It never blocks voice startup.
+    void postJson("/api/memory/consolidate", { trigger: "session" }).catch(() => {});
     try {
       // Agenda + boundaries ride in with the session. Location and weather
       // get a small startup budget, then arrive as a contextual update rather
@@ -942,6 +1097,13 @@ function VoiceCore({
         metadata?: Record<string, string | number | boolean | null>;
       };
       const attentionSurface = (attentionData.attention?.surface ?? null) as AttentionSurface | null;
+      if (attentionSurface) {
+        registerAttentionSurface(
+          attentionData.attention,
+          contextTurnRef.current,
+          ["obligation", "anniversary", "thread_follow_up"].includes(attentionSurface.kind),
+        );
+      }
       // Raw anniversary inventory is no longer injected. The policy layer
       // must authorize one before the personality layer is allowed to see it.
       const annivText = attentionSurface?.kind === "anniversary" ? `- ${attentionSurface.text}` : "none";

@@ -104,7 +104,7 @@ function decide({ mode = "guarded", ctx = context(), now = moment(), supplement 
 
 let ledger = new MemoryEventLedger({ databasePath });
 try {
-  check(ledger.stats().schemaVersion === 6, "schema migration 6 preserves the attention audit store");
+  check(ledger.stats().schemaVersion === 7, "schema migration 7 preserves the attention audit store");
   check(attentionMode(undefined) === "guarded", "attention defaults to the narrow guarded rollout");
   check(attentionMode("shadow") === "shadow", "shadow rollout is selectable");
   check(attentionMode("active") === "active", "active rollout is selectable");
@@ -349,7 +349,7 @@ try {
   check(oneAside.candidates.filter((candidate) => candidate.eligible && candidate.class === "proactive").length > 1, "other eligible candidates remain visible for shadow evaluation");
   check(oneAside.surface !== null && oneAside.candidateLimit === 1, "only one eligible proactive candidate is authorized");
   const score = oneAside.surface.factors;
-  const recomputed = score.helpfulness + score.urgency + score.actionability + score.relationalValue + score.repairValue - score.interruptionCost - score.repetitionCost - score.uncertaintyCost - score.sensitivityRisk - score.userLoad;
+  const recomputed = score.helpfulness + score.urgency + score.actionability + score.relationalValue + score.repairValue - score.interruptionCost - score.repetitionCost - score.uncertaintyCost - score.sensitivityRisk - score.userLoad + (score.learnedValue ?? 0);
   check(recomputed === oneAside.surface.score, "utility score exactly equals its positive value minus explicit costs");
 
   const empty = decide({ now: moment({ query: "hello" }) });

@@ -80,6 +80,17 @@ export type RoutineView = {
     lastObservedAt: string | null;
     evidenceEventIds: string[];
   }>;
+  associations: Array<{
+    id: string;
+    subject: EntityRef;
+    outcomeKind: "emotion" | "decision" | "status";
+    outcomeValue: string;
+    status: "emerging" | "active" | "stale";
+    confidence: number;
+    observations: number;
+    evidenceEventIds: string[];
+    lastObservedAt: string;
+  }>;
   evidenceEventIds: string[];
   agentText: string;
   projectorVersion: typeof CONTINUITY_PROJECTOR_VERSION;
@@ -571,13 +582,38 @@ export function buildRoutineView(
     };
   });
   const evidenceEventIds = [...new Set(routines.flatMap((routine) => routine.evidenceEventIds))];
-  const agentText = routines.length
-    ? `${routines.length} recurring pattern${routines.length === 1 ? " is" : "s are"} visible; ${routines.filter((routine) => routine.status === "open").length} crossed the evidence threshold and ${routines.filter((routine) => routine.status === "emerging").length} remain hypotheses.`
-    : "No routine has enough grounded evidence to present yet.";
+  const associations = ledger
+    .listAssociations({ userId, space, includeStale: false, limit: 50 })
+    .map((association) => ({
+      id: association.id,
+      subject: {
+        id: association.subjectId,
+        kind: association.subjectKind as EntityRef["kind"],
+        label: association.subjectLabel,
+      },
+      outcomeKind: association.outcomeKind,
+      outcomeValue: association.outcomeValue,
+      status: association.status,
+      confidence: association.confidence,
+      observations: association.observations,
+      evidenceEventIds: association.evidenceEventIds,
+      lastObservedAt: association.lastObservedAt,
+    }));
+  const associationText = associations.slice(0, 5).map(
+    (association) =>
+      `${association.subject.label} was associated with ${association.outcomeValue} across ${association.observations} grounded episodes (${association.status}; non-causal hypothesis).`,
+  );
+  const agentText = [
+    routines.length
+      ? `${routines.length} recurring pattern${routines.length === 1 ? " is" : "s are"} visible; ${routines.filter((routine) => routine.status === "open").length} crossed the evidence threshold and ${routines.filter((routine) => routine.status === "emerging").length} remain hypotheses.`
+      : "No explicit routine has enough grounded evidence to present yet.",
+    ...associationText,
+  ].join(" ");
   return {
     type: "routines",
     routines,
-    evidenceEventIds,
+    associations,
+    evidenceEventIds: [...new Set([...evidenceEventIds, ...associations.flatMap((item) => item.evidenceEventIds)])],
     agentText,
     projectorVersion: CONTINUITY_PROJECTOR_VERSION,
   };

@@ -6,8 +6,12 @@ import type {
 } from "./context-compiler";
 import type { ReturningMemory } from "./continuity-projectors";
 import type { MemorySpace, Sensitivity, TrustTier } from "./contracts";
+import {
+  learnedAttentionBoost,
+  type AttentionLearningProfile,
+} from "./learning-engine";
 
-export const ATTENTION_ENGINE_VERSION = "attention-v1" as const;
+export const ATTENTION_ENGINE_VERSION = "attention-v2" as const;
 
 export type AttentionMode = "shadow" | "guarded" | "active";
 export type AttentionMomentKind = "session_start" | "user_turn" | "lull";
@@ -119,6 +123,7 @@ export type AttentionFactors = {
   uncertaintyCost: number;
   sensitivityRisk: number;
   userLoad: number;
+  learnedValue?: number;
 };
 
 export type AttentionGate = {
@@ -246,7 +251,8 @@ function factorScore(factors: AttentionFactors) {
     factors.repetitionCost -
     factors.uncertaintyCost -
     factors.sensitivityRisk -
-    factors.userLoad
+    factors.userLoad +
+    (factors.learnedValue ?? 0)
   );
 }
 
@@ -805,6 +811,7 @@ export function decideAttention(
     context: CompiledContext;
     supplement?: AttentionSupplement;
     history?: AttentionHistoryItem[];
+    learningProfile?: AttentionLearningProfile | null;
   },
 ): AttentionDecision {
   const mode = input.mode ?? attentionMode();
@@ -828,6 +835,16 @@ export function decideAttention(
       const factors = {
         ...candidate.factors,
         repetitionCost: repeated ? Math.max(30, candidate.factors.repetitionCost) : candidate.factors.repetitionCost,
+        // Learning may reorder otherwise-safe proactive candidates, but it
+        // never edits a hard gate, raises autonomy, or changes required repair.
+        learnedValue:
+          candidate.class === "proactive"
+            ? learnedAttentionBoost(input.learningProfile, {
+                kind: candidate.kind,
+                momentKind: input.moment.kind,
+                cooldownKey: candidate.cooldownKey,
+              })
+            : 0,
       };
       const score = factorScore(factors);
       const blockedBy = gates.filter((item) => !item.passed).map((item) => item.name);

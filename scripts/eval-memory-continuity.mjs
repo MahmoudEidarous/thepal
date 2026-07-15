@@ -82,7 +82,7 @@ function fileClaims(event, candidates) {
 }
 
 try {
-  check(ledger.stats().schemaVersion === 6, "Phase 6 projections survive schema migration 6");
+  check(ledger.stats().schemaVersion === 7, "continuity projections survive schema migration 7");
 
   const created = createCanonicalProspective(
     {

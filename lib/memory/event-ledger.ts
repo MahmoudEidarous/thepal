@@ -41,7 +41,7 @@ function sqliteConstructor(): SqliteModule["DatabaseSync"] {
 }
 
 const CONTRACT_VERSION = 1 as const;
-const SCHEMA_VERSION = 6 as const;
+const SCHEMA_VERSION = 7 as const;
 const MAX_JOB_ATTEMPTS = 5;
 const PROCESSING_JOB_KIND = "enrich_and_index" as const;
 
@@ -148,6 +148,66 @@ export type RecordAttentionDecisionInput = Omit<
   relationshipEventIds?: string[];
 };
 
+export type AttentionOutcomeSignal =
+  | "engaged"
+  | "laughter"
+  | "silence"
+  | "ignored"
+  | "interrupted"
+  | "dismissed"
+  | "resolved"
+  | "explicit_positive"
+  | "explicit_negative";
+
+export type AttentionOutcomeRecord = {
+  id: string;
+  decisionId: string;
+  userId: string;
+  space: MemorySpace;
+  candidateId: string;
+  candidateKind: string;
+  cooldownKey: string;
+  momentKind: AttentionDecisionRecord["momentKind"];
+  signal: AttentionOutcomeSignal;
+  reward: number;
+  confidence: number;
+  source: "system_observed" | "user_explicit";
+  occurredAt: string;
+  idempotencyKey: string;
+};
+
+export type MemoryAssociationRecord = {
+  id: string;
+  userId: string;
+  space: MemorySpace;
+  subjectId: string;
+  subjectKind: string;
+  subjectLabel: string;
+  outcomeKind: "emotion" | "decision" | "status";
+  outcomeValue: string;
+  status: "emerging" | "active" | "stale";
+  confidence: number;
+  observations: number;
+  evidenceEventIds: string[];
+  firstObservedAt: string;
+  lastObservedAt: string;
+  projectorVersion: string;
+  updatedAt: string;
+};
+
+export type MemoryConsolidationRun = {
+  id: string;
+  userId: string;
+  space: MemorySpace;
+  projectorVersion: string;
+  trigger: "manual" | "session" | "scheduled" | "outcome";
+  status: "completed" | "skipped";
+  startedAt: string;
+  completedAt: string;
+  metrics: Record<string, number | string | boolean>;
+  idempotencyKey: string;
+};
+
 export type TombstoneResult = {
   event: MemoryEvent;
   mirror: MemoryMirror | null;
@@ -186,6 +246,10 @@ export type LedgerStats = {
   threadTransitions: number;
   prospective: number;
   attentionDecisions: number;
+  attentionOutcomes: number;
+  attentionProfiles: number;
+  associations: number;
+  consolidationRuns: number;
   relationshipEvents: number;
   relationshipStates: number;
   mirrors: number;
@@ -501,6 +565,82 @@ const MIGRATION_6 = `
     ON memory_attention_relationship_evidence(relationship_event_id, decision_id);
 `;
 
+const MIGRATION_7 = `
+  CREATE TABLE IF NOT EXISTS memory_attention_outcomes (
+    id TEXT PRIMARY KEY,
+    decision_id TEXT NOT NULL REFERENCES memory_attention_decisions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    candidate_id TEXT NOT NULL,
+    candidate_kind TEXT NOT NULL,
+    cooldown_key TEXT NOT NULL,
+    moment_kind TEXT NOT NULL CHECK (moment_kind IN ('session_start','user_turn','lull')),
+    signal TEXT NOT NULL CHECK (signal IN (
+      'engaged','laughter','silence','ignored','interrupted','dismissed',
+      'resolved','explicit_positive','explicit_negative'
+    )),
+    reward REAL NOT NULL CHECK (reward >= -1 AND reward <= 1),
+    confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+    source TEXT NOT NULL CHECK (source IN ('system_observed','user_explicit')),
+    occurred_at TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    UNIQUE(user_id, space, idempotency_key)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_attention_outcomes_scope_time
+    ON memory_attention_outcomes(user_id, space, occurred_at DESC);
+  CREATE INDEX IF NOT EXISTS memory_attention_outcomes_decision
+    ON memory_attention_outcomes(decision_id, occurred_at);
+
+  CREATE TABLE IF NOT EXISTS memory_attention_profiles (
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    projector_version TEXT NOT NULL,
+    profile_json TEXT NOT NULL CHECK (json_valid(profile_json)),
+    projected_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, space)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS memory_associations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    subject_id TEXT NOT NULL,
+    subject_kind TEXT NOT NULL,
+    subject_label TEXT NOT NULL,
+    outcome_kind TEXT NOT NULL CHECK (outcome_kind IN ('emotion','decision','status')),
+    outcome_value TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('emerging','active','stale')),
+    confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+    observations INTEGER NOT NULL CHECK (observations >= 2),
+    evidence_event_ids_json TEXT NOT NULL CHECK (json_valid(evidence_event_ids_json)),
+    first_observed_at TEXT NOT NULL,
+    last_observed_at TEXT NOT NULL,
+    projector_version TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_associations_scope_status
+    ON memory_associations(user_id, space, status, last_observed_at DESC);
+
+  CREATE TABLE IF NOT EXISTS memory_consolidation_runs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    space TEXT NOT NULL CHECK (space IN ('personal','work','health','eval')),
+    projector_version TEXT NOT NULL,
+    trigger TEXT NOT NULL CHECK (trigger IN ('manual','session','scheduled','outcome')),
+    status TEXT NOT NULL CHECK (status IN ('completed','skipped')),
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    metrics_json TEXT NOT NULL CHECK (json_valid(metrics_json)),
+    idempotency_key TEXT NOT NULL,
+    UNIQUE(user_id, space, idempotency_key)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS memory_consolidation_scope_time
+    ON memory_consolidation_runs(user_id, space, completed_at DESC);
+`;
+
 function text(row: SqlRow, key: string): string {
   const value = row[key];
   if (typeof value !== "string") throw new Error(`memory ledger: ${key} is not text`);
@@ -715,6 +855,86 @@ function relationshipEventFromRow(row: SqlRow): RelationshipEvent {
   };
 }
 
+function attentionDecisionFromRow(row: SqlRow): AttentionDecisionRecord {
+  const selected = row.selected_score;
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    space: text(row, "space") as MemorySpace,
+    sessionId: text(row, "session_id"),
+    engineVersion: text(row, "engine_version"),
+    mode: text(row, "mode") as AttentionDecisionRecord["mode"],
+    momentKind: text(row, "moment_kind") as AttentionDecisionRecord["momentKind"],
+    selectedCandidateId: nullableText(row, "selected_candidate_id"),
+    selectedKind: nullableText(row, "selected_kind"),
+    selectedAction: nullableText(row, "selected_action"),
+    selectedScore:
+      typeof selected === "number" || typeof selected === "bigint" ? Number(selected) : null,
+    cooldownKey: nullableText(row, "cooldown_key"),
+    shouldSurface: integer(row, "should_surface") === 1,
+    silenceReason: nullableText(row, "silence_reason"),
+    decision: JSON.parse(text(row, "decision_json")) as Record<string, unknown>,
+    evidenceEventIds: JSON.parse(text(row, "evidence_event_ids_json")) as string[],
+    relationshipEventIds: JSON.parse(text(row, "relationship_event_ids_json")) as string[],
+    createdAt: text(row, "created_at"),
+  };
+}
+
+function attentionOutcomeFromRow(row: SqlRow): AttentionOutcomeRecord {
+  return {
+    id: text(row, "id"),
+    decisionId: text(row, "decision_id"),
+    userId: text(row, "user_id"),
+    space: text(row, "space") as MemorySpace,
+    candidateId: text(row, "candidate_id"),
+    candidateKind: text(row, "candidate_kind"),
+    cooldownKey: text(row, "cooldown_key"),
+    momentKind: text(row, "moment_kind") as AttentionOutcomeRecord["momentKind"],
+    signal: text(row, "signal") as AttentionOutcomeSignal,
+    reward: Number(row.reward),
+    confidence: Number(row.confidence),
+    source: text(row, "source") as AttentionOutcomeRecord["source"],
+    occurredAt: text(row, "occurred_at"),
+    idempotencyKey: text(row, "idempotency_key"),
+  };
+}
+
+function associationFromRow(row: SqlRow): MemoryAssociationRecord {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    space: text(row, "space") as MemorySpace,
+    subjectId: text(row, "subject_id"),
+    subjectKind: text(row, "subject_kind"),
+    subjectLabel: text(row, "subject_label"),
+    outcomeKind: text(row, "outcome_kind") as MemoryAssociationRecord["outcomeKind"],
+    outcomeValue: text(row, "outcome_value"),
+    status: text(row, "status") as MemoryAssociationRecord["status"],
+    confidence: Number(row.confidence),
+    observations: integer(row, "observations"),
+    evidenceEventIds: JSON.parse(text(row, "evidence_event_ids_json")) as string[],
+    firstObservedAt: text(row, "first_observed_at"),
+    lastObservedAt: text(row, "last_observed_at"),
+    projectorVersion: text(row, "projector_version"),
+    updatedAt: text(row, "updated_at"),
+  };
+}
+
+function consolidationRunFromRow(row: SqlRow): MemoryConsolidationRun {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    space: text(row, "space") as MemorySpace,
+    projectorVersion: text(row, "projector_version"),
+    trigger: text(row, "trigger") as MemoryConsolidationRun["trigger"],
+    status: text(row, "status") as MemoryConsolidationRun["status"],
+    startedAt: text(row, "started_at"),
+    completedAt: text(row, "completed_at"),
+    metrics: JSON.parse(text(row, "metrics_json")) as MemoryConsolidationRun["metrics"],
+    idempotencyKey: text(row, "idempotency_key"),
+  };
+}
+
 function mirrorFromRow(row: SqlRow): MemoryMirror {
   return {
     eventId: text(row, "event_id"),
@@ -858,6 +1078,23 @@ export class MemoryEventLedger {
           )
           .run(6, "relationship memory, repair, dialect, and humor lifecycle", now);
         this.database.exec("PRAGMA user_version = 6");
+        this.database.exec("COMMIT");
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    }
+    if (current < 7) {
+      const now = new Date().toISOString();
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(MIGRATION_7);
+        this.database
+          .prepare(
+            "INSERT OR IGNORE INTO memory_schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+          )
+          .run(7, "outcome learning, associations, and background consolidation", now);
+        this.database.exec("PRAGMA user_version = 7");
         this.database.exec("COMMIT");
       } catch (error) {
         this.database.exec("ROLLBACK");
@@ -1936,6 +2173,9 @@ export class MemoryEventLedger {
       this.database
         .prepare("DELETE FROM memory_relationship_state WHERE user_id = ? AND space = ?")
         .run(event.userId, event.space);
+      this.database
+        .prepare("DELETE FROM memory_attention_profiles WHERE user_id = ? AND space = ?")
+        .run(event.userId, event.space);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -2011,6 +2251,27 @@ export class MemoryEventLedger {
     return { ...input, evidenceEventIds, relationshipEventIds };
   }
 
+  getAttentionDecision(id: string): AttentionDecisionRecord | null {
+    const row = this.database
+      .prepare(`
+        SELECT d.*,
+          COALESCE((
+            SELECT json_group_array(e.event_id)
+            FROM memory_attention_evidence e
+            WHERE e.decision_id = d.id
+          ), '[]') AS evidence_event_ids_json,
+          COALESCE((
+            SELECT json_group_array(re.relationship_event_id)
+            FROM memory_attention_relationship_evidence re
+            WHERE re.decision_id = d.id
+          ), '[]') AS relationship_event_ids_json
+        FROM memory_attention_decisions d
+        WHERE d.id = ?
+      `)
+      .get(id) as SqlRow | undefined;
+    return row ? attentionDecisionFromRow(row) : null;
+  }
+
   listAttentionDecisions(options: {
     userId?: string;
     space: MemorySpace;
@@ -2050,30 +2311,220 @@ export class MemoryEventLedger {
         LIMIT ?
       `)
       .all(...values) as SqlRow[];
-    return rows.map((row) => {
-      const selected = row.selected_score;
-      return {
-        id: text(row, "id"),
-        userId: text(row, "user_id"),
-        space: text(row, "space") as MemorySpace,
-        sessionId: text(row, "session_id"),
-        engineVersion: text(row, "engine_version"),
-        mode: text(row, "mode") as AttentionDecisionRecord["mode"],
-        momentKind: text(row, "moment_kind") as AttentionDecisionRecord["momentKind"],
-        selectedCandidateId: nullableText(row, "selected_candidate_id"),
-        selectedKind: nullableText(row, "selected_kind"),
-        selectedAction: nullableText(row, "selected_action"),
-        selectedScore:
-          typeof selected === "number" || typeof selected === "bigint" ? Number(selected) : null,
-        cooldownKey: nullableText(row, "cooldown_key"),
-        shouldSurface: integer(row, "should_surface") === 1,
-        silenceReason: nullableText(row, "silence_reason"),
-        decision: JSON.parse(text(row, "decision_json")) as Record<string, unknown>,
-        evidenceEventIds: JSON.parse(text(row, "evidence_event_ids_json")) as string[],
-        relationshipEventIds: JSON.parse(text(row, "relationship_event_ids_json")) as string[],
-        createdAt: text(row, "created_at"),
-      };
-    });
+    return rows.map(attentionDecisionFromRow);
+  }
+
+  recordAttentionOutcome(input: Omit<AttentionOutcomeRecord, "id">, id = randomUUID()) {
+    const existing = this.database
+      .prepare(
+        "SELECT * FROM memory_attention_outcomes WHERE user_id = ? AND space = ? AND idempotency_key = ?",
+      )
+      .get(input.userId, input.space, input.idempotencyKey) as SqlRow | undefined;
+    if (existing) return attentionOutcomeFromRow(existing);
+    this.database
+      .prepare(`
+        INSERT INTO memory_attention_outcomes(
+          id, decision_id, user_id, space, candidate_id, candidate_kind,
+          cooldown_key, moment_kind, signal, reward, confidence, source,
+          occurred_at, idempotency_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id,
+        input.decisionId,
+        input.userId,
+        input.space,
+        input.candidateId,
+        input.candidateKind,
+        input.cooldownKey,
+        input.momentKind,
+        input.signal,
+        input.reward,
+        input.confidence,
+        input.source,
+        input.occurredAt,
+        input.idempotencyKey,
+      );
+    const row = this.database
+      .prepare("SELECT * FROM memory_attention_outcomes WHERE id = ?")
+      .get(id) as SqlRow;
+    return attentionOutcomeFromRow(row);
+  }
+
+  listAttentionOutcomes(options: {
+    userId?: string;
+    space: MemorySpace;
+    decisionId?: string;
+    limit?: number;
+  }): AttentionOutcomeRecord[] {
+    const conditions = ["user_id = ?", "space = ?"];
+    const values: Array<string | number> = [options.userId ?? "local-user", options.space];
+    if (options.decisionId) {
+      conditions.push("decision_id = ?");
+      values.push(options.decisionId);
+    }
+    const limit = Math.max(1, Math.min(20_000, Math.floor(options.limit ?? 5_000)));
+    values.push(limit);
+    return (this.database
+      .prepare(`
+        SELECT * FROM memory_attention_outcomes
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY occurred_at, id
+        LIMIT ?
+      `)
+      .all(...values) as SqlRow[]).map(attentionOutcomeFromRow);
+  }
+
+  replaceAttentionProfile(
+    userId: string,
+    space: MemorySpace,
+    projectorVersion: string,
+    profile: Record<string, unknown>,
+    projectedAt = new Date().toISOString(),
+  ) {
+    this.database
+      .prepare(`
+        INSERT INTO memory_attention_profiles(
+          user_id, space, projector_version, profile_json, projected_at
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, space) DO UPDATE SET
+          projector_version = excluded.projector_version,
+          profile_json = excluded.profile_json,
+          projected_at = excluded.projected_at
+      `)
+      .run(userId, space, projectorVersion, JSON.stringify(profile), projectedAt);
+  }
+
+  getAttentionProfile(userId: string, space: MemorySpace) {
+    const row = this.database
+      .prepare(
+        "SELECT projector_version, profile_json, projected_at FROM memory_attention_profiles WHERE user_id = ? AND space = ?",
+      )
+      .get(userId, space) as SqlRow | undefined;
+    return row
+      ? {
+          projectorVersion: text(row, "projector_version"),
+          profile: JSON.parse(text(row, "profile_json")) as Record<string, unknown>,
+          projectedAt: text(row, "projected_at"),
+        }
+      : null;
+  }
+
+  replaceAssociations(
+    userId: string,
+    space: MemorySpace,
+    associations: MemoryAssociationRecord[],
+    now = new Date().toISOString(),
+  ) {
+    if (associations.some((association) => association.userId !== userId || association.space !== space)) {
+      throw new Error("memory ledger: association projection crossed a user or memory space");
+    }
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database
+        .prepare("DELETE FROM memory_associations WHERE user_id = ? AND space = ?")
+        .run(userId, space);
+      const insert = this.database.prepare(`
+        INSERT INTO memory_associations(
+          id, user_id, space, subject_id, subject_kind, subject_label,
+          outcome_kind, outcome_value, status, confidence, observations,
+          evidence_event_ids_json, first_observed_at, last_observed_at,
+          projector_version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const association of associations) {
+        insert.run(
+          association.id,
+          userId,
+          space,
+          association.subjectId,
+          association.subjectKind,
+          association.subjectLabel,
+          association.outcomeKind,
+          association.outcomeValue,
+          association.status,
+          association.confidence,
+          association.observations,
+          JSON.stringify(association.evidenceEventIds),
+          association.firstObservedAt,
+          association.lastObservedAt,
+          association.projectorVersion,
+          now,
+        );
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listAssociations(options: {
+    userId?: string;
+    space: MemorySpace;
+    includeStale?: boolean;
+    limit?: number;
+  }): MemoryAssociationRecord[] {
+    const conditions = ["user_id = ?", "space = ?"];
+    const values: Array<string | number> = [options.userId ?? "local-user", options.space];
+    if (!options.includeStale) conditions.push("status != 'stale'");
+    const limit = Math.max(1, Math.min(5_000, Math.floor(options.limit ?? 500)));
+    values.push(limit);
+    return (this.database
+      .prepare(`
+        SELECT * FROM memory_associations
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY status = 'active' DESC, confidence DESC, last_observed_at DESC, id
+        LIMIT ?
+      `)
+      .all(...values) as SqlRow[]).map(associationFromRow);
+  }
+
+  recordConsolidationRun(run: MemoryConsolidationRun) {
+    const existing = this.database
+      .prepare(
+        "SELECT * FROM memory_consolidation_runs WHERE user_id = ? AND space = ? AND idempotency_key = ?",
+      )
+      .get(run.userId, run.space, run.idempotencyKey) as SqlRow | undefined;
+    if (existing) return consolidationRunFromRow(existing);
+    this.database
+      .prepare(`
+        INSERT INTO memory_consolidation_runs(
+          id, user_id, space, projector_version, trigger, status,
+          started_at, completed_at, metrics_json, idempotency_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        run.id,
+        run.userId,
+        run.space,
+        run.projectorVersion,
+        run.trigger,
+        run.status,
+        run.startedAt,
+        run.completedAt,
+        JSON.stringify(run.metrics),
+        run.idempotencyKey,
+      );
+    return run;
+  }
+
+  listConsolidationRuns(options: {
+    userId?: string;
+    space: MemorySpace;
+    limit?: number;
+  }): MemoryConsolidationRun[] {
+    const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 20)));
+    return (this.database
+      .prepare(`
+        SELECT * FROM memory_consolidation_runs
+        WHERE user_id = ? AND space = ?
+        ORDER BY completed_at DESC, id DESC
+        LIMIT ?
+      `)
+      .all(options.userId ?? "local-user", options.space, limit) as SqlRow[]).map(
+      consolidationRunFromRow,
+    );
   }
 
   attentionDecisionCountForEvent(eventId: string): number {
@@ -2258,6 +2709,12 @@ export class MemoryEventLedger {
         .prepare("DELETE FROM memory_relationship_state WHERE user_id = ? AND space = ?")
         .run(event.userId, event.space);
       this.database
+        .prepare("DELETE FROM memory_attention_profiles WHERE user_id = ? AND space = ?")
+        .run(event.userId, event.space);
+      this.database
+        .prepare("DELETE FROM memory_associations WHERE user_id = ? AND space = ?")
+        .run(event.userId, event.space);
+      this.database
         .prepare(`
           UPDATE memory_jobs
           SET status = 'succeeded', locked_at = NULL,
@@ -2346,6 +2803,10 @@ export class MemoryEventLedger {
       threadTransitions: count("memory_thread_transitions"),
       prospective: count("memory_prospective_triggers"),
       attentionDecisions: count("memory_attention_decisions"),
+      attentionOutcomes: count("memory_attention_outcomes"),
+      attentionProfiles: count("memory_attention_profiles"),
+      associations: count("memory_associations"),
+      consolidationRuns: count("memory_consolidation_runs"),
       relationshipEvents: count("memory_relationship_events"),
       relationshipStates: count("memory_relationship_state"),
       mirrors: count("memory_mirrors"),

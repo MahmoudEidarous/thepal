@@ -334,6 +334,20 @@ export function projectRelationshipState(
       const dimension = state.dialect[payload.dimension];
       dimension.evidenceRelationshipEventIds = append(dimension.evidenceRelationshipEventIds, event.id);
     }
+    if (event.kind === "interaction_feedback" && payload.targetId && payload.outcome) {
+      const artifact = humor.get(payload.targetId);
+      if (artifact) {
+        artifact.evidenceRelationshipEventIds = append(
+          artifact.evidenceRelationshipEventIds,
+          event.id,
+        );
+        if (payload.outcome === "positive") artifact.positiveSignals += 1;
+        if (payload.outcome === "negative") artifact.negativeSignals += 1;
+        if (artifact.negativeSignals >= 2) artifact.status = "retired";
+        else if (payload.outcome === "negative") artifact.status = "cooling";
+        else if (artifact.userReuseCount > 0) artifact.status = "shared";
+      }
+    }
     if (event.kind === "humor_episode" || event.kind === "shared_reference") {
       const artifactId = payload.artifactId ?? event.id;
       const artifact = humor.get(artifactId) ?? {
