@@ -276,8 +276,8 @@ export function ThreadBoard({ data }: { data: ThreadBoardData | null }) {
                               still owed
                             </h3>
                             <div className="mt-2.5 flex flex-col gap-2">
-                              {openCommitments.map((commitment) => (
-                                <div key={commitment.eventId} className="flex items-start gap-2.5 text-[12.5px] leading-relaxed text-zinc-400">
+                              {openCommitments.map((commitment, index) => (
+                                <div key={`${commitment.eventId}:${commitment.content}:${commitment.due ?? ""}:${index}`} className="flex items-start gap-2.5 text-[12.5px] leading-relaxed text-zinc-400">
                                   <span className="mt-[7px] size-[5px] shrink-0 rounded-full bg-amber-200/70" />
                                   <span className="flex-1">{commitment.content}</span>
                                   {commitment.due && (

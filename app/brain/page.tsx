@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Dust, GRAIN } from "@/components/atmosphere";
 import { ContinuityBoard } from "@/components/continuity-board";
@@ -116,6 +116,7 @@ export default function Brain() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [closing, setClosing] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
+  const bootstrapped = useRef(false);
 
   const today = localToday();
 
@@ -169,23 +170,31 @@ export default function Brain() {
       .catch(() => {});
   }, []);
 
-  // Everything loads up front — tab switches are instant, counts are live.
-  // The graph owns its focused canonical + semantic request separately.
+  // Prime every tab once so the first switch is instant. After that, only
+  // refresh the surface the user can see; rebuilding four large projections
+  // every twelve seconds made the Brain do invisible work and caused jank.
   useEffect(() => {
-    loadLedger();
-    loadCaptures();
-    loadThreads();
-    loadContinuity();
+    const loadActive = () => {
+      if (document.hidden) return;
+      if (view === "ledger") loadLedger();
+      else if (view === "captures" || view === "people") loadCaptures();
+      else if (view === "threads") loadThreads();
+      else if (view === "continuity") loadContinuity();
+    };
+    if (!bootstrapped.current) {
+      bootstrapped.current = true;
+      loadLedger();
+      loadCaptures();
+      loadThreads();
+      loadContinuity();
+    } else {
+      loadActive();
+    }
     const t = setInterval(() => {
-      if (!document.hidden) {
-        loadLedger();
-        loadCaptures();
-        loadThreads();
-        loadContinuity();
-      }
-    }, 12_000);
+      loadActive();
+    }, 20_000);
     return () => clearInterval(t);
-  }, [loadLedger, loadCaptures, loadThreads, loadContinuity]);
+  }, [view, loadLedger, loadCaptures, loadThreads, loadContinuity]);
 
   useEffect(() => {
     fetch("/api/profile")

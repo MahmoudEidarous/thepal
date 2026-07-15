@@ -58,10 +58,18 @@ function ConstellationPanel({
 }: {
   view: NonNullable<NonNullable<ContinuityExperience["overview"]>["week"]>;
 }) {
-  const events = [...view.toldEvents].sort((a, b) => b.at.localeCompare(a.at));
+  const events = useMemo(
+    () => [...view.toldEvents].sort((a, b) => b.at.localeCompare(a.at)),
+    [view.toldEvents],
+  );
+  const accent = view.period === "week" ? "violet" : "sky";
   return (
     <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
-      <section className="rounded-3xl border border-white/[0.08] bg-white/[0.028] p-5 sm:p-6">
+      <section className="relative overflow-hidden rounded-3xl border border-white/[0.08] bg-white/[0.028] p-5 sm:p-6">
+        <div
+          aria-hidden
+          className={`pointer-events-none absolute -right-24 -top-24 size-64 rounded-full blur-3xl ${accent === "violet" ? "bg-violet-400/[0.055]" : "bg-sky-400/[0.05]"}`}
+        />
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-violet-200/55">
@@ -84,6 +92,19 @@ function ConstellationPanel({
             ))}
           </div>
         </div>
+        {view.people.length > 0 && (
+          <div className="relative mt-5 flex flex-wrap gap-1.5">
+            {view.people.slice(0, 8).map((person) => (
+              <span
+                key={person.entity.id}
+                className="rounded-full border border-white/[0.07] bg-black/15 px-2.5 py-1 text-[10px] text-zinc-500"
+              >
+                {person.entity.label}
+                <span className="ml-1.5 font-mono text-[8px] text-zinc-700">{person.mentions}</span>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="mt-6">
           <SectionTitle count={events.length}>what was told</SectionTitle>
           {events.length ? (
@@ -134,7 +155,7 @@ function ConstellationPanel({
           {view.decisions.length ? (
             <div className="flex flex-col gap-2.5">
               {view.decisions.slice(0, 8).map((decision) => (
-                <p key={decision.eventId} className="text-[12px] leading-relaxed text-zinc-500">
+                <p key={decision.claimId} className="text-[12px] leading-relaxed text-zinc-500">
                   {decision.text}
                 </p>
               ))}
@@ -144,12 +165,29 @@ function ConstellationPanel({
           )}
         </section>
 
+        {view.changes.length > 0 && (
+          <section className="rounded-3xl border border-rose-200/[0.08] bg-rose-200/[0.018] p-5">
+            <SectionTitle count={view.changes.length}>what changed</SectionTitle>
+            <div className="flex flex-col gap-2.5">
+              {view.changes.slice(0, 8).map((change) => (
+                <div key={change.beliefKey} className="flex items-start gap-2.5">
+                  <span className="mt-[6px] size-[5px] shrink-0 rounded-full bg-rose-300/65" />
+                  <p className="text-[11.5px] leading-relaxed text-zinc-500">{change.text}</p>
+                  <span className="ml-auto shrink-0 font-mono text-[7.5px] uppercase tracking-[0.1em] text-rose-200/40">
+                    {change.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className="rounded-3xl border border-white/[0.07] bg-white/[0.024] p-5">
           <SectionTitle count={view.emotionalEpisodes.length}>felt moments</SectionTitle>
           {view.emotionalEpisodes.length ? (
             <div className="flex flex-col gap-2.5">
               {view.emotionalEpisodes.slice(0, 8).map((episode) => (
-                <div key={`${episode.eventId}:${episode.at}`} className="flex items-baseline gap-2">
+                <div key={episode.claimId} className="flex items-baseline gap-2">
                   <span className="font-mono text-[8px] text-zinc-700">{dateLabel(episode.at)}</span>
                   <span className="text-[12px] text-zinc-500">{episode.state}</span>
                 </div>
@@ -249,8 +287,8 @@ function DossierPanel() {
             </section>
             <section className="rounded-3xl border border-white/[0.07] bg-white/[0.024] p-5">
               <SectionTitle count={dossier.commitments.length}>open promises</SectionTitle>
-              {dossier.commitments.length ? dossier.commitments.slice(0, 10).map((commitment) => (
-                <div key={commitment.eventId} className="mb-2.5 flex gap-3 text-[12px] text-zinc-500 last:mb-0">
+              {dossier.commitments.length ? dossier.commitments.slice(0, 10).map((commitment, index) => (
+                <div key={`${commitment.eventId}:${commitment.content}:${commitment.due ?? ""}:${index}`} className="mb-2.5 flex gap-3 text-[12px] text-zinc-500 last:mb-0">
                   <span className="mt-[6px] size-[4px] shrink-0 rounded-full bg-amber-200/65" />
                   <span className="flex-1">{commitment.content}</span>
                   {commitment.due && <span className="shrink-0 text-[10px] text-zinc-700">{dateLabel(commitment.due)}</span>}
@@ -282,7 +320,7 @@ function EmotionPanel({ view }: { view: NonNullable<NonNullable<ContinuityExperi
       </div>
       <div className="relative mt-7 flex flex-col gap-5 border-l border-white/[0.08] pl-6">
         {episodes.slice(0, 16).map((episode) => (
-          <div key={`${episode.eventId}:${episode.toldAt}`} className="relative">
+          <div key={episode.claimId} className="relative">
             <span className="absolute -left-[27px] top-[7px] size-[6px] rounded-full bg-rose-300/65 shadow-[0_0_10px_rgb(253_164_175/0.3)]" />
             <div className="flex flex-wrap items-baseline gap-2">
               <p className="text-[14px] text-zinc-300">{episode.state}</p>
@@ -307,8 +345,8 @@ function RoutinePanel({ view }: { view: NonNullable<NonNullable<ContinuityExperi
         <div>
           <SectionTitle count={view.routines.length}>explicit routines</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
-            {view.routines.map((routine) => (
-              <article key={`${routine.entity.id}:${routine.pattern}`} className="rounded-3xl border border-white/[0.08] bg-white/[0.028] p-5">
+            {view.routines.map((routine, index) => (
+              <article key={`${routine.entity.id}:${routine.pattern}:${index}`} className="rounded-3xl border border-white/[0.08] bg-white/[0.028] p-5">
                 <div className="flex items-center gap-2">
                   <span className={`size-[6px] rounded-full ${routine.status === "open" ? "bg-emerald-300/70" : "bg-violet-300/65"}`} />
                   <h2 className="text-[14px] font-medium text-zinc-200">{routine.entity.label}</h2>
@@ -357,8 +395,8 @@ function RoutinePanel({ view }: { view: NonNullable<NonNullable<ContinuityExperi
 function AnniversaryPanel({ view }: { view: NonNullable<NonNullable<ContinuityExperience["overview"]>["anniversaries"]> }) {
   return view.memories.length ? (
     <div className="grid gap-3 sm:grid-cols-2">
-      {view.memories.map((memory) => (
-        <article key={`${memory.evidenceEventIds[0]}:${memory.storyDate}`} className="relative overflow-hidden rounded-3xl border border-amber-200/[0.1] bg-amber-100/[0.025] p-6">
+      {view.memories.map((memory, index) => (
+        <article key={`${memory.evidenceEventIds.join(",")}:${memory.storyDate}:${memory.text}:${index}`} className="relative overflow-hidden rounded-3xl border border-amber-200/[0.1] bg-amber-100/[0.025] p-6">
           <div className="absolute -right-8 -top-8 size-28 rounded-full bg-amber-200/[0.035] blur-xl" />
           <p className="font-mono text-[8.5px] uppercase tracking-[0.19em] text-amber-100/45">{memory.when}</p>
           <p className="mt-3 text-[14px] leading-relaxed text-zinc-300">{memory.text}</p>
@@ -425,15 +463,25 @@ export function ContinuityBoard({ data }: { data: ContinuityExperience | null })
       <div className="mx-auto flex w-[min(92vw,960px)] flex-col gap-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="text-[26px] font-light tracking-tight text-zinc-50">Continuity</h1>
+            <p className="mb-1 flex items-center gap-2 font-mono text-[8.5px] uppercase tracking-[0.22em] text-zinc-700">
+              <span className="size-1.5 rounded-full bg-emerald-300/70 shadow-[0_0_10px_rgb(110_231_183/0.28)]" />
+              living memory
+            </p>
+            <h1 className="text-[28px] font-light tracking-[-0.025em] text-zinc-50">Continuity</h1>
             <p className="mt-1 max-w-2xl text-[13.5px] leading-relaxed text-zinc-500">
               The living view—people and projects, what the week meant, feelings that moved, patterns forming, the past returning, and jokes becoming ours.
             </p>
           </div>
-          <div className="glass-chip flex max-w-full gap-0.5 overflow-x-auto rounded-full p-0.5">
+          <div
+            role="tablist"
+            aria-label="Continuity views"
+            className="glass-chip flex max-w-full gap-0.5 overflow-x-auto rounded-full p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
             {PANELS.map((item) => (
               <button
                 key={item.id}
+                role="tab"
+                aria-selected={panel === item.id}
                 onClick={() => setPanel(item.id)}
                 className={`shrink-0 rounded-full px-3 py-1.5 text-[10.5px] font-medium transition-all ${panel === item.id ? "bg-white/10 text-zinc-100" : "text-zinc-600 hover:text-zinc-300"}`}
               >
@@ -445,8 +493,12 @@ export function ContinuityBoard({ data }: { data: ContinuityExperience | null })
 
         {overview && (
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-            {metrics.map(([label, value, tone]) => (
-              <div key={String(label)} className="glass rounded-2xl px-4 py-3.5">
+            {metrics.map(([label, value, tone], index) => (
+              <div key={String(label)} className="glass group overflow-hidden rounded-2xl px-4 py-3.5 transition-transform duration-300 hover:-translate-y-0.5">
+                <span
+                  aria-hidden
+                  className={`absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent ${index === 0 ? "via-violet-300/40" : index === 1 ? "via-sky-300/40" : index === 2 ? "via-emerald-300/35" : "via-amber-200/35"} to-transparent`}
+                />
                 <p className={`text-[22px] font-light tabular-nums ${tone}`}>{value}</p>
                 <p className="mt-0.5 font-mono text-[8.5px] uppercase tracking-[0.18em] text-zinc-700">{label}</p>
               </div>
@@ -455,21 +507,31 @@ export function ContinuityBoard({ data }: { data: ContinuityExperience | null })
         )}
 
         {!overview ? (
-          <p className="text-[13px] text-zinc-600">assembling continuity…</p>
-        ) : panel === "week" ? (
-          <ConstellationPanel view={overview.week} />
-        ) : panel === "month" ? (
-          <ConstellationPanel view={overview.month} />
-        ) : panel === "dossier" ? (
-          <DossierPanel />
-        ) : panel === "emotions" ? (
-          <EmotionPanel view={overview.emotions} />
-        ) : panel === "routines" ? (
-          <RoutinePanel view={overview.routines} />
-        ) : panel === "anniversaries" ? (
-          <AnniversaryPanel view={overview.anniversaries} />
+          <div className="grid animate-pulse gap-4 lg:grid-cols-[1.25fr_.75fr]">
+            <div className="h-80 rounded-3xl border border-white/[0.06] bg-white/[0.025]" />
+            <div className="flex flex-col gap-4">
+              <div className="h-36 rounded-3xl border border-white/[0.06] bg-white/[0.02]" />
+              <div className="h-28 rounded-3xl border border-white/[0.06] bg-white/[0.02]" />
+            </div>
+          </div>
         ) : (
-          <HumorPanel view={overview.humor} />
+          <div key={panel} role="tabpanel" className="animate-rise">
+            {panel === "week" ? (
+              <ConstellationPanel view={overview.week} />
+            ) : panel === "month" ? (
+              <ConstellationPanel view={overview.month} />
+            ) : panel === "dossier" ? (
+              <DossierPanel />
+            ) : panel === "emotions" ? (
+              <EmotionPanel view={overview.emotions} />
+            ) : panel === "routines" ? (
+              <RoutinePanel view={overview.routines} />
+            ) : panel === "anniversaries" ? (
+              <AnniversaryPanel view={overview.anniversaries} />
+            ) : (
+              <HumorPanel view={overview.humor} />
+            )}
+          </div>
         )}
 
         <p className="text-center font-mono text-[9px] uppercase tracking-[0.19em] text-zinc-700">

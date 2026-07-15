@@ -452,6 +452,20 @@ try {
   check(constellation.decisions.length === 1, "the weekly constellation includes decisions");
   check(constellation.emotionalEpisodes.length === 2, "the weekly constellation includes emotional peaks and shifts");
   check(
+    constellation.decisions.every((decision) => decision.claimId.length > 0),
+    "each constellation decision exposes its stable claim identity",
+  );
+  check(
+    new Set(constellation.decisions.map((decision) => decision.claimId)).size ===
+      constellation.decisions.length,
+    "multiple decisions from one telling remain distinct UI records",
+  );
+  check(
+    new Set(constellation.emotionalEpisodes.map((episode) => episode.claimId)).size ===
+      constellation.emotionalEpisodes.length,
+    "multiple felt moments from one telling retain unique identities",
+  );
+  check(
     constellation.unfinishedThreads.some((thread) => thread.title === "Layla"),
     "the weekly constellation includes unfinished situations",
   );
@@ -461,6 +475,11 @@ try {
   );
 
   const emotionalArc = buildEmotionalArc(ledger, "fixture-user", "eval", "Atlas");
+  check(
+    new Set(emotionalArc.episodes.map((episode) => episode.claimId)).size ===
+      emotionalArc.episodes.length,
+    "emotional-arc episodes preserve stable claim identity",
+  );
   check(
     emotionalArc.direction === "changed" && emotionalArc.currentEpisode?.state === "exhausted",
     "emotional continuity detects a change between grounded episodes",

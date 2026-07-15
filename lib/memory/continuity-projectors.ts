@@ -42,8 +42,8 @@ export type Constellation = {
     value: string;
   }>;
   people: Array<{ entity: EntityRef; mentions: number }>;
-  decisions: Array<{ eventId: string; text: string }>;
-  emotionalEpisodes: Array<{ eventId: string; at: string; state: string }>;
+  decisions: Array<{ claimId: string; eventId: string; text: string }>;
+  emotionalEpisodes: Array<{ claimId: string; eventId: string; at: string; state: string }>;
   changes: Array<{ beliefKey: string; text: string; status: Belief["status"] }>;
   unfinishedThreads: LifeThread[];
   resolvedThreads: LifeThread[];
@@ -55,6 +55,7 @@ export type Constellation = {
 export type EmotionalArc = {
   type: "emotional-arc";
   episodes: Array<{
+    claimId: string;
     eventId: string;
     subject: EntityRef;
     state: string;
@@ -448,10 +449,19 @@ export function buildConstellation(
   }
   const decisions = claims
     .filter(({ claim }) => claim.predicate === "decision" && told.some((event) => event.id === claim.eventId))
-    .map(({ claim }) => ({ eventId: claim.eventId, text: `${claim.subject.label}: ${valueText(claim.object)}` }));
+    .map(({ claim }) => ({
+      claimId: claim.id,
+      eventId: claim.eventId,
+      text: `${claim.subject.label}: ${valueText(claim.object)}`,
+    }));
   const emotionalEpisodes = claims
     .filter(({ claim }) => claim.predicate === "emotion.state" && (inRange(claim.validTime?.start ?? "", range) || told.some((event) => event.id === claim.eventId)))
-    .map(({ claim, recordedAt }) => ({ eventId: claim.eventId, at: claim.validTime?.start ?? recordedAt, state: valueText(claim.object) }));
+    .map(({ claim, recordedAt }) => ({
+      claimId: claim.id,
+      eventId: claim.eventId,
+      at: claim.validTime?.start ?? recordedAt,
+      state: valueText(claim.object),
+    }));
   const changes = beliefs
     .filter((belief) => inRange(belief.systemTime.start, range) && (belief.status !== "current" || belief.opposition.length > 0))
     .map((belief) => ({
@@ -510,6 +520,7 @@ export function buildEmotionalArc(
         (!about || matches(about, `${entry.claim.subject.label} ${valueText(entry.claim.object)}`)),
     )
     .map((entry) => ({
+      claimId: entry.claim.id,
       eventId: entry.claim.eventId,
       subject: entry.claim.subject,
       state: valueText(entry.claim.object),

@@ -47,8 +47,8 @@
     {
       "name": "prospective and human continuity projections",
       "command": "npm run eval:memory-continuity",
-      "expected": "64 checks passing",
-      "successMarker": "64 memory-continuity checks passed"
+      "expected": "68 checks passing",
+      "successMarker": "68 memory-continuity checks passed"
     },
     {
       "name": "unified attention and intelligent silence",
