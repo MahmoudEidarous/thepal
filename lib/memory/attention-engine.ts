@@ -903,6 +903,42 @@ export function decideAttention(
   };
 }
 
+// Deterministic policy decides which candidates are safe and applicable.
+// A higher-level conversational planner may choose among that already-safe
+// set—or choose silence—but it can never rescue a blocked candidate. This is
+// the narrow seam where model judgment belongs: taste after policy, not
+// instead of policy.
+export function applyAttentionChoice(
+  decision: AttentionDecision,
+  candidateId: string | null,
+  reason = "the presence planner chose silence for this moment",
+): AttentionDecision {
+  if (decision.required.some((candidate) => candidate.kind === "repair")) {
+    return {
+      ...decision,
+      selected: null,
+      surface: null,
+      proactiveAction: "stay_silent",
+      silenceReason: "relationship repair suppresses proactive memory",
+    };
+  }
+  const chosen = candidateId
+    ? decision.candidates.find(
+        (candidate) =>
+          candidate.id === candidateId &&
+          candidate.class === "proactive" &&
+          candidate.eligible,
+      ) ?? null
+    : null;
+  return {
+    ...decision,
+    selected: chosen,
+    surface: chosen,
+    proactiveAction: chosen ? "speak" : "stay_silent",
+    silenceReason: chosen ? null : reason,
+  };
+}
+
 export function formatAttentionDecision(decision: AttentionDecision) {
   const required = decision.required.length
     ? `\nREQUIRED RESPONSE CONSTRAINTS\n${decision.required

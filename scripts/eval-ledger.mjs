@@ -138,8 +138,31 @@ check(
   "the filing receipt exposes the old telling as an update",
   JSON.stringify(b.data.conflict ?? null),
 );
-const oldDoc = await engineDoc(aId);
-check(oldDoc.metadata?.status === "superseded", "old terms retire as superseded");
+let oldDoc = await engineDoc(aId);
+const supersessionKept = await until(async () => {
+  oldDoc = await engineDoc(aId);
+  if (oldDoc.metadata?.status === "superseded") return true;
+  // A failed immutable provider document is safely reborn under a new ID.
+  // Follow the canonical event rather than confusing provider identity with
+  // Recall's durable identity.
+  const canonicalEventId = a.data.receipt?.eventId;
+  if (!canonicalEventId) return false;
+  const listed = await fetch(`${ENGINE}/v3/documents/list`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ containerTags: ["recall_eval"], limit: 200 }),
+  }).then((r) => r.json());
+  for (const memory of listed.memories ?? []) {
+    if (memory.metadata?.canonicalEventId !== canonicalEventId) continue;
+    const fresh = await engineDoc(memory.id);
+    if (fresh.metadata?.status === "superseded") {
+      oldDoc = fresh;
+      return true;
+    }
+  }
+  return false;
+});
+check(supersessionKept, "old terms retire as superseded");
 check(oldDoc.metadata?.supersededBy === bId, "audit trail links old → new");
 const newDoc = await engineDoc(bId);
 check(newDoc.metadata?.updates === aId, "new telling stores the old → new lineage");

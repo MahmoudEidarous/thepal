@@ -53,6 +53,30 @@ type PendingAttentionOutcome = {
   silenceTimer: ReturnType<typeof setTimeout> | null;
 };
 
+type PresencePlanData = {
+  act: string;
+  utterance: string;
+  candidateKind: string | null;
+  preparedAt: string;
+  expiresAt: string;
+};
+
+type PreparedPresenceData = {
+  planId: string;
+  sessionId: string;
+  opening: string;
+  expiresAt: string;
+  plan: PresencePlanData;
+};
+
+type UsedPresenceData = {
+  act: string;
+  plannedOpening: string;
+  spokenOpening: string | null;
+  candidateKind: string | null;
+  decisionId: string | null;
+};
+
 class StaleTurnError extends Error {
   constructor() {
     super("the user started a newer turn");
@@ -204,6 +228,7 @@ function VoiceCore({
   const [lines, setLines] = useState<Line[]>([]);
   const linesRef = useRef<Line[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
+  const [conversationMode, setConversationMode] = useState<"speaking" | "listening">("listening");
   const [pending, setPending] = useState<PendingForget | null>(null);
   const [error, setError] = useState<string | null>(null);
   // ?orb=speaking forces a visual state — QA and demo framing only.
@@ -334,8 +359,56 @@ function VoiceCore({
   const sessionStartedAtIsoRef = useRef<string | null>(null);
   const sessionFinalizedRef = useRef(true);
   const continuityKernelRef = useRef<string | null>(null);
+  const nextSessionIdRef = useRef("");
+  const preparedPresenceRef = useRef<PreparedPresenceData | null>(null);
+  const presencePreparePromiseRef = useRef<Promise<PreparedPresenceData | null> | null>(null);
+  const usedPresenceRef = useRef<UsedPresenceData | null>(null);
+  const lullTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lullEpochRef = useRef(0);
+  const lullAttemptedEpochRef = useRef<number | null>(null);
   const pendingAmbientRef = useRef<string | null>(null);
   const pendingAttentionOutcomeRef = useRef<PendingAttentionOutcome | null>(null);
+
+  const primePresence = useCallback(
+    (force = false) => {
+      const current = preparedPresenceRef.current;
+      if (!force && current && Date.parse(current.expiresAt) > Date.now() + 15_000) {
+        return Promise.resolve(current);
+      }
+      if (!force && presencePreparePromiseRef.current) return presencePreparePromiseRef.current;
+      const id = crypto.randomUUID();
+      nextSessionIdRef.current = id;
+      const task = postJson("/api/presence/plan", {
+        action: "prepare",
+        sessionId: id,
+        momentKind: "session_start",
+        greetingName: greetingName ?? null,
+      })
+        .then((data) => {
+          const prepared =
+            typeof data?.planId === "string" &&
+            typeof data?.sessionId === "string" &&
+            typeof data?.expiresAt === "string" &&
+            data?.plan &&
+            typeof data.plan === "object"
+              ? (data as PreparedPresenceData)
+              : null;
+          if (prepared && nextSessionIdRef.current === id) {
+            preparedPresenceRef.current = prepared;
+          }
+          return prepared;
+        })
+        .catch(() => null)
+        .finally(() => {
+          if (presencePreparePromiseRef.current === task) {
+            presencePreparePromiseRef.current = null;
+          }
+        });
+      presencePreparePromiseRef.current = task;
+      return task;
+    },
+    [greetingName],
+  );
 
   useEffect(() => {
     let active = true;
@@ -352,6 +425,10 @@ function VoiceCore({
     };
   }, []);
 
+  useEffect(() => {
+    void primePresence();
+  }, [primePresence]);
+
   const finalizeSessionHandoff = useCallback(() => {
     const sessionId = sessionIdRef.current;
     const startedAt = sessionStartedAtIsoRef.current;
@@ -362,15 +439,19 @@ function VoiceCore({
       startedAt,
       endedAt: new Date().toISOString(),
       lines: linesRef.current.slice(-40),
+      presence: usedPresenceRef.current,
     };
     void postJson("/api/memory/session", payload)
       .then((data) => {
         if (typeof data?.kernel?.compiledText === "string") {
           continuityKernelRef.current = data.kernel.compiledText;
         }
+        preparedPresenceRef.current = null;
+        usedPresenceRef.current = null;
+        void primePresence(true);
       })
       .catch(() => {});
-  }, []);
+  }, [primePresence]);
 
   useEffect(() => {
     const onPageHide = () => {
@@ -383,6 +464,7 @@ function VoiceCore({
         startedAt,
         endedAt: new Date().toISOString(),
         lines: linesRef.current.slice(-40),
+        presence: usedPresenceRef.current,
       });
       try {
         navigator.sendBeacon(
@@ -524,6 +606,18 @@ function VoiceCore({
     [recordLatency],
   );
 
+  const clearLullTimer = useCallback(() => {
+    if (lullTimerRef.current) clearTimeout(lullTimerRef.current);
+    lullTimerRef.current = null;
+  }, []);
+
+  useEffect(
+    () => () => {
+      clearLullTimer();
+    },
+    [clearLullTimer],
+  );
+
   // what you owe, at a glance — refreshed each minute while idle
   const [agenda, setAgenda] = useState<{ open: number; next: string | null }>({
     open: 0,
@@ -586,6 +680,9 @@ function VoiceCore({
     },
     onMessage: ({ message, role }) => {
       if (role === "user") {
+        clearLullTimer();
+        lullEpochRef.current += 1;
+        lullAttemptedEpochRef.current = null;
         // the user's voice freezes the constellation where the audio
         // actually is — queued chapters must not light over them
         clearStoryFlips();
@@ -672,7 +769,10 @@ function VoiceCore({
     },
     onVadScore: ({ vadScore }) => {
       const now = performance.now();
-      if (vadScore >= 0.55) lastUserVoiceAtRef.current = now;
+      if (vadScore >= 0.55) {
+        lastUserVoiceAtRef.current = now;
+        clearLullTimer();
+      }
       if (!isSpeakingRef.current || vadScore < 0.72 || bargeInRef.current) return;
 
       // Server interruption is authoritative, but muting locally on the first
@@ -689,6 +789,7 @@ function VoiceCore({
     },
     onInterruption: () => {
       const now = performance.now();
+      clearLullTimer();
       if (!bargeInRef.current) beginUserTurn();
       if (bargeDetectedAtRef.current !== null) {
         recordLatency("interrupt → server cut", now - bargeDetectedAtRef.current);
@@ -703,13 +804,19 @@ function VoiceCore({
       } catch {}
     },
     onModeChange: ({ mode }) => {
-      if (mode !== "listening" || !bargeInRef.current) return;
-      bargeInRef.current = false;
-      bargeDetectedAtRef.current = null;
-      duckedRef.current = false;
-      try {
-        conversationRef.current.setVolume({ volume: 1 });
-      } catch {}
+      setConversationMode(mode);
+      if (mode !== "listening") {
+        clearLullTimer();
+        return;
+      }
+      if (bargeInRef.current) {
+        bargeInRef.current = false;
+        bargeDetectedAtRef.current = null;
+        duckedRef.current = false;
+        try {
+          conversationRef.current.setVolume({ volume: 1 });
+        } catch {}
+      }
     },
     onAgentChatResponsePart: ({ type }) => {
       const timing = replyTimingRef.current;
@@ -745,6 +852,43 @@ function VoiceCore({
   useEffect(() => {
     conversationRef.current = conversation;
   }, [conversation]);
+  useEffect(() => {
+    clearLullTimer();
+    if (!connected || conversationMode !== "listening") return;
+    const epoch = lullEpochRef.current;
+    if (lullAttemptedEpochRef.current === epoch) return;
+    const turn = contextTurnRef.current;
+    lullTimerRef.current = setTimeout(() => {
+      lullTimerRef.current = null;
+      if (lullAttemptedEpochRef.current === epoch || turn !== contextTurnRef.current) return;
+      lullAttemptedEpochRef.current = epoch;
+      void turnPostJson("/api/presence/plan", {
+        action: "plan_and_commit",
+        sessionId: sessionIdRef.current,
+        momentKind: "lull",
+        recentTurns: linesRef.current.slice(-8),
+        greetingName: greetingName ?? null,
+      })
+        .then((data) => {
+          if (turn !== contextTurnRef.current || epoch !== lullEpochRef.current) return;
+          registerAttentionSurface(data.attention, turn, true);
+          if (typeof data.presenceText === "string") {
+            conversationRef.current.sendContextualUpdate(data.presenceText, {
+              contextId: `presence-lull-${epoch}`,
+            });
+          }
+        })
+        .catch(() => {});
+    }, 7_000);
+    return clearLullTimer;
+  }, [
+    clearLullTimer,
+    connected,
+    conversationMode,
+    greetingName,
+    registerAttentionSurface,
+    turnPostJson,
+  ]);
   useEffect(() => {
     if (!connected || !pendingAmbientRef.current) return;
     try {
@@ -1072,9 +1216,22 @@ function VoiceCore({
     linesRef.current = [];
     beginUserTurn();
     sessionStartAtRef.current = performance.now();
-    sessionIdRef.current = crypto.randomUUID();
+    let prepared = preparedPresenceRef.current;
+    if (!prepared || Date.parse(prepared.expiresAt) <= Date.now() + 15_000) {
+      preparedPresenceRef.current = null;
+      const pendingPresence = presencePreparePromiseRef.current ?? primePresence(true);
+      prepared = await Promise.race([
+        pendingPresence,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 900)),
+      ]);
+    }
+    sessionIdRef.current = prepared?.sessionId ?? crypto.randomUUID();
+    nextSessionIdRef.current = "";
     sessionStartedAtIsoRef.current = new Date().toISOString();
     sessionFinalizedRef.current = false;
+    usedPresenceRef.current = null;
+    preparedPresenceRef.current = null;
+    presencePreparePromiseRef.current = null;
     // A bounded deterministic "sleep" pass refreshes rebuildable learning
     // projections at most once every six hours. It never blocks voice startup.
     void postJson("/api/memory/consolidate", { trigger: "session" }).catch(() => {});
@@ -1095,6 +1252,26 @@ function VoiceCore({
           setTimeout(() => resolve({ senses: null, timedOut: true }), 350),
         ),
       ]);
+      const presencePromise = prepared
+        ? postJson("/api/presence/plan", {
+            action: "consume",
+            planId: prepared.planId,
+            sessionId: sessionIdRef.current,
+            momentKind: "session_start",
+          }).catch(() =>
+            postJson("/api/presence/plan", {
+              action: "plan_and_commit",
+              sessionId: sessionIdRef.current,
+              momentKind: "session_start",
+              greetingName: greetingName ?? null,
+            }),
+          )
+        : postJson("/api/presence/plan", {
+            action: "plan_and_commit",
+            sessionId: sessionIdRef.current,
+            momentKind: "session_start",
+            greetingName: greetingName ?? null,
+          });
       const [
         res,
         agendaData,
@@ -1115,15 +1292,19 @@ function VoiceCore({
         fetch("/api/briefings")
           .then((r) => (r.ok ? r.json() : { briefings: [] }))
           .catch(() => ({ briefings: [] })),
-        postJson("/api/attention/decide", {
-          query: "",
-          sessionId: sessionIdRef.current,
-          momentKind: "session_start",
-          includeHistory: false,
-          includeProspective: true,
-          includeObligations: true,
-          includeAnniversaries: true,
-        }).catch(() => ({ attention: null, attentionText: "", relationshipText: "" })),
+        presencePromise.catch(() => ({
+          opening: "Hey.",
+          plan: {
+            act: "simple_presence",
+            utterance: "Hey.",
+            candidateKind: null,
+          },
+          attention: null,
+          attentionText: "",
+          relationshipText: "",
+          presenceText:
+            "RECALL PRESENCE PLAN presence-planner-v1\nmoment=session_start; action=speak; act=simple_presence\nNatural line: \"Hey.\"",
+        })),
         fetch("/api/prospective")
           .then((r) => (r.ok ? r.json() : { triggers: [] }))
           .catch(() => ({ triggers: [] })),
@@ -1230,76 +1411,23 @@ function VoiceCore({
         Date.now() - new Date(latest.createdAt).getTime() < 20 * 3600_000;
       const briefingText = fresh ? latest.content.slice(0, 1200) : "none yet";
 
-      // the agent's first words — computed here, from the live ledger
-      const items = agendaData.commitments as AgendaItem[];
-      const urgent = attentionSurface?.kind === "obligation"
-        ? items.find(
-            (item) =>
-              attentionSurface.text.includes(item.content) ||
-              item.content.includes(attentionSurface.text),
-          )
-        : undefined;
-      const requiredRepair = (
-        (attentionData.attention?.required ?? []) as Array<{ kind?: string; text?: string }>
-      ).find((candidate) => candidate.kind === "repair" && candidate.text);
-      const namePart = greetingName ? `, ${greetingName}` : "";
-      const hour = new Date().getHours();
-      const hi = hour < 5 ? `Still up${namePart}?` : `Hey${namePart}.`;
-      const dueDay = (d: string) =>
-        new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { weekday: "long" });
-      // ledger items are written in the user's voice ("I still owe…") —
-      // spoken BY the agent they must flip person, or the agent owes it
-      const inYourVoice = (s: string) =>
-        s
-          .replace(/\bI am\b/g, "you are")
-          .replace(/\bI'm\b/g, "you're")
-          .replace(/\bI've\b/g, "you've")
-          .replace(/\bI\b/g, "you")
-          .replace(/\b[Mm]y\b/g, "your")
-          .replace(/\bme\b/g, "you");
-      const urgentLine = urgent
-        ? `${inYourVoice(urgent.content.split(/(?<=[.!?])\s/)[0]).replace(/\.$/, "")}${
-            urgent.overdue
-              ? " — that one's overdue"
-              : urgent.dueToday
-                ? " — that's today"
-                : urgent.due
-                  ? `, due ${dueDay(urgent.due)}`
-                  : ""
-          }`
-        : null;
-      const threadExpected =
-        attentionSurface?.kind === "thread_follow_up" &&
-        typeof attentionSurface.metadata?.expectedNext === "string"
-          ? attentionSurface.metadata.expectedNext.trim()
-          : "";
-      const threadTitle =
-        attentionSurface?.kind === "thread_follow_up" &&
-        typeof attentionSurface.metadata?.title === "string"
-          ? attentionSurface.metadata.title.trim()
-          : "";
-      const expectedWithArticle = /^(?:a|an|the|your|their)\b/i.test(threadExpected)
-        ? threadExpected
-        : `the ${threadExpected}`;
-      const threadQuestion = !threadExpected
-        ? `${attentionSurface?.text ?? "that situation"}. What happened?`
-        : /scheduled$/i.test(threadExpected) && threadTitle
-          ? `how did ${threadTitle} go?`
-          : /\b(?:response|reply|result|approval|decision|delivery|answer)\b/i.test(threadExpected)
-            ? `did ${expectedWithArticle} come through?`
-            : `did ${threadExpected} happen?`;
+      // Policy supplied the safe candidate set; a model chose the actual
+      // conversational move and wording before the tap. The client no longer
+      // turns memory counts and candidate kinds into repetitive templates.
       const opening =
-        requiredRepair?.text
-          ? `${hi} Before anything else: ${requiredRepair.text}. That was on me. I'm sorry. Let me correct it before we move on.`
-          : memoryCount === 0
-            ? `${hi} We haven't met — I'm Recall. Whatever you tell me, I keep. So: who are you?`
-            : urgentLine
-              ? `${hi} Before I forget — ${urgentLine}. Talk to me.`
-              : attentionSurface?.kind === "anniversary"
-                ? `${hi} ${attentionSurface.text}. That came back to me today.`
-                : attentionSurface?.kind === "thread_follow_up"
-                  ? `${hi} I've been wondering—${threadQuestion}`
-                  : `${hi} ${memoryCount} memories and counting. What's new?`;
+        typeof attentionData.opening === "string" && attentionData.opening.trim()
+          ? attentionData.opening.trim()
+          : "Hey.";
+      const planned = attentionData.plan as Partial<PresencePlanData> | undefined;
+      usedPresenceRef.current = {
+        act: typeof planned?.act === "string" ? planned.act : "simple_presence",
+        plannedOpening: opening,
+        spokenOpening: null,
+        candidateKind:
+          typeof planned?.candidateKind === "string" ? planned.candidateKind : null,
+        decisionId:
+          typeof attentionData.attention?.id === "string" ? attentionData.attention.id : null,
+      };
 
       conversation.startSession({
         signedUrl: data.signedUrl,
@@ -1316,6 +1444,10 @@ function VoiceCore({
           anniversaries: annivText,
           prospective: prospectiveText,
           attention: attentionText,
+          presence:
+            typeof attentionData.presenceText === "string"
+              ? attentionData.presenceText
+              : "RECALL PRESENCE PLAN unavailable; use a plain greeting and do not introduce memory proactively.",
           continuity_kernel: continuityKernel,
           knowledge_route:
             "No active user turn yet. Wait for the newest RECALL KNOWLEDGE ROUTE block before using a retrieval tool.",

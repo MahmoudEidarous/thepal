@@ -216,6 +216,15 @@ export type SessionHandoffSummary = {
   lastAgentStatement: string | null;
   unresolvedConversation: string | null;
   meaningfulReasons: string[];
+  presence?: SessionPresenceSummary | null;
+};
+
+export type SessionPresenceSummary = {
+  act: string;
+  plannedOpening: string;
+  spokenOpening: string | null;
+  candidateKind: string | null;
+  decisionId: string | null;
 };
 
 export type MemorySessionHandoff = {

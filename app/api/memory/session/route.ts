@@ -4,6 +4,7 @@ import {
   type SessionLine,
 } from "@/lib/memory/continuity-kernel";
 import { getMemoryEventLedger } from "@/lib/memory/event-ledger";
+import type { SessionPresenceSummary } from "@/lib/memory/event-ledger";
 import { apiError, asSpace } from "@/lib/validate";
 
 export const runtime = "nodejs";
@@ -21,6 +22,19 @@ function lines(value: unknown): SessionLine[] {
     )
     .slice(-40)
     .map((line) => ({ role: line.role, text: line.text.slice(0, 2_000) }));
+}
+
+function presence(value: unknown): SessionPresenceSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const input = value as Record<string, unknown>;
+  if (typeof input.act !== "string" || typeof input.plannedOpening !== "string") return null;
+  return {
+    act: input.act.slice(0, 80),
+    plannedOpening: input.plannedOpening.slice(0, 400),
+    spokenOpening: typeof input.spokenOpening === "string" ? input.spokenOpening.slice(0, 400) : null,
+    candidateKind: typeof input.candidateKind === "string" ? input.candidateKind.slice(0, 80) : null,
+    decisionId: typeof input.decisionId === "string" ? input.decisionId.slice(0, 160) : null,
+  };
 }
 
 export async function POST(request: Request) {
@@ -42,6 +56,7 @@ export async function POST(request: Request) {
           ? body.endedAt
           : undefined,
       lines: lines(body.lines),
+      presence: presence(body.presence),
     });
     const materialized = materializeContinuityKernel({ space, force: true });
     return Response.json({ handoff, kernel: materialized.kernel, rebuilt: true });

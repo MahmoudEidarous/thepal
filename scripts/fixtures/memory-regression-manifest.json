@@ -75,6 +75,12 @@
       "successMarker": "56 memory-kernel checks passed"
     },
     {
+      "name": "model-directed natural continuity and presence",
+      "command": "npm run eval:memory-presence",
+      "expected": "44 checks passing",
+      "successMarker": "44 memory-presence checks passed"
+    },
+    {
       "name": "memory concurrency and crash recovery",
       "command": "npm run eval:memory-stress",
       "expected": "12 checks passing",

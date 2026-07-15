@@ -7,6 +7,7 @@ import {
   type MemoryEventLedger,
   type MemorySessionHandoff,
   type SessionHandoffSummary,
+  type SessionPresenceSummary,
 } from "./event-ledger";
 import { buildConstellation, buildEmotionalArc, buildRoutineView } from "./continuity-projectors";
 import { loadRelationshipState } from "./relationship-service";
@@ -165,6 +166,7 @@ export function createSessionHandoff(input: {
   startedAt: string;
   endedAt?: string;
   lines: SessionLine[];
+  presence?: SessionPresenceSummary | null;
 }) {
   const ledger = input.ledger ?? getMemoryEventLedger();
   const userId = input.userId ?? "local-user";
@@ -183,6 +185,17 @@ export function createSessionHandoff(input: {
   const relationshipEvents = ledger
     .listRelationshipEvents({ userId, space: input.space, limit: 10_000 })
     .filter((event) => event.sessionId === input.sessionId);
+  const presenceDecision = input.presence?.decisionId
+    ? ledger.getAttentionDecision(input.presence.decisionId)
+    : null;
+  if (
+    presenceDecision &&
+    (presenceDecision.userId !== userId ||
+      presenceDecision.space !== input.space ||
+      presenceDecision.sessionId !== input.sessionId)
+  ) {
+    throw new Error("session handoff: presence decision crossed a user, space, or session");
+  }
   const durationMs = Math.max(0, Date.parse(endedAt) - Date.parse(startedAt));
   const userCharacters = userLines.reduce((total, line) => total + line.text.length, 0);
   const lastLine = lines.at(-1) ?? null;
@@ -211,6 +224,17 @@ export function createSessionHandoff(input: {
     lastAgentStatement: agentLines.at(-1)?.text ?? null,
     unresolvedConversation,
     meaningfulReasons,
+    presence: input.presence
+      ? {
+          act: clean(input.presence.act, 80),
+          plannedOpening: clean(input.presence.plannedOpening, 400),
+          spokenOpening: agentLines[0]?.text ?? input.presence.spokenOpening ?? null,
+          candidateKind: input.presence.candidateKind
+            ? clean(input.presence.candidateKind, 80)
+            : null,
+          decisionId: presenceDecision?.id ?? null,
+        }
+      : null,
   };
   return ledger.upsertSessionHandoff({
     userId,
@@ -221,8 +245,18 @@ export function createSessionHandoff(input: {
     meaningfulScore,
     meaningful: meaningfulScore >= 2,
     summary,
-    evidenceEventIds: events.map((event) => event.id),
-    relationshipEventIds: relationshipEvents.map((event) => event.id),
+    evidenceEventIds: [
+      ...new Set([
+        ...events.map((event) => event.id),
+        ...(presenceDecision?.evidenceEventIds ?? []),
+      ]),
+    ],
+    relationshipEventIds: [
+      ...new Set([
+        ...relationshipEvents.map((event) => event.id),
+        ...(presenceDecision?.relationshipEventIds ?? []),
+      ]),
+    ],
   });
 }
 
