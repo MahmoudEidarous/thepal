@@ -1,17 +1,21 @@
 # 🌌 thepal
 
-> **A local-first memory ledger engine and voice friend built on Supermemory Local.**  
-> *A canonical SQLite database, semantic search mirror, and write-time enrichment pass that make local AI memory exact, grounded, and self-directing.*
+> **A local-first memory ledger engine built on Supermemory Local.**  
+> *A canonical SQLite database, semantic search mirror, write-time enrichment pass, and relationship state machine that make local AI memory exact, grounded, and self-directing.*
 
 ---
 
-`thepal` is a voice-first memory companion that runs entirely locally on your machine. Rather than relying on naive vector search over raw chat history, it operates on a structured **SQLite evidence ledger** coupled with a high-speed **Supermemory Local** semantic search mirror. 
+`thepal` is built on a core thesis: **Memory infrastructure is not the product; judgment, continuity, and initiative are.** 
+
+Instead of relying on naive vector search over chat history transcripts, `thepal` utilizes a structured local **SQLite evidence ledger** coupled with a high-speed **Supermemory Local** semantic search mirror. It resolves facts, extracts commitments, tracks relationship state, and implements a unified attention gating flow—all running privately on your own machine.
+
+Built for the **Supermemory Local Hackathon, July 2026**.
 
 ---
 
-## 🧠 The Memory Search & Ledger Engine
+## 🧠 Memory Engine Architecture
 
-At the core of `thepal` is a multi-tier memory system designed to ensure zero hallucination, strict factual grounding, and high-integrity search recall.
+The memory engine uses a multi-tier pipeline to ensure zero hallucination, strict factual grounding, and high-integrity search recall.
 
 ```
                  You (Voice / Files)
@@ -45,7 +49,17 @@ All inputs pass through a local classification pass before they are committed to
 *   **Temporal Resolution**: Resolves relative time expressions (*"next Friday at 4"*, *"last summer"*) into concrete calendar dates at the moment of capture.
 *   **Search Optimization**: key aliases and alternative phrasings are embedded directly into the payload, ensuring differently-worded questions still trigger clean matches.
 
-### 4. Unified Attention Gating (`lib/memory/attention-engine.ts`)
+### 4. Background Claim Extraction (`extract_and_project`)
+Every canonical event transaction kicks off an asynchronous background job:
+*   **Schema-Validated Claims**: Parses the redacted raw event to extract subject/predicate/object claims containing polarity, modality, valid time, and scope.
+*   **Trust Policies**: Only `user_direct` evidence can create safety constraints, boundaries, or write permanent beliefs about the user. Document-derived data (`external_content`) or model observations (`recall_observation`) remain tentative and can never overwrite user-asserted facts.
+
+### 5. Two-Step Deletion Flow (Forgetting Ceremony)
+Deletions run through a two-step transactional consent flow:
+*   **Preview**: Creates a short-lived token and reports affected belief keys, claim counts, and source text.
+*   **Execution**: Consumes the token, tombstones the event, deletes derived claims, clears dependent beliefs, and re-projects the ledger while queueing a vector purge job in Supermemory Local.
+
+### 6. Unified Attention Gating (`lib/memory/attention-engine.ts`)
 To take initiative without becoming noisy or annoying, proactive candidates (obligations, follow-ups, anniversaries) must clear 8 strict security gates:
 *   `user_permission` & `memory_space` validation.
 *   `source_grounding` (must be backed by direct database evidence).
@@ -53,24 +67,10 @@ To take initiative without becoming noisy or annoying, proactive candidates (obl
 *   `cooldown` metrics to prevent conversational spam.
 *   `repair_priority` (any database-logged relationship "rupture" blocks all proactive remarks until a repair is resolved).
 
----
-
-## 🎙️ The Voice Friend Interface
-
-Sitting directly on top of the memory engine is an expressive, human-like voice interface:
-
-### 1. Close-Friend Persona
-*   **Direct & Candid**: Buns all formal assistant pleasantries (*"Certainly!"*, *"How can I help you today?"*). Speak with contractions and a casual, direct, close-friend dialect.
-*   **Teasing & Banter**: The Pal roasts you if you forget your own plans, and uses natural, casual swearing if the vibe matches.
-*   **Respiration**: Natively gasps, sighs, or takes a soft breath to sound physically present.
-
-### 2. "Inner Monologue" Latency Masking
-*   While database searches and vector matches execute, the Pal drops a quick, context-aware, organic filler thought to hold the line:
-    *   *Example (Roast)*: `[sighs] "Wait, you actually forgot that? Let me check the database..."`
-    *   *Example (Puzzled)*: `[chuckles] "Wait, what? Let me pull up what you said about him..."`
-
-### 3. Logo-Click Diagnostics Panel
-*   Click the **`the pal`** header logo in the UI to open a retro-monospace developer HUD showing live SQLite counts, database integrity checks, and mirror sync status.
+### 7. Relational State Engine
+Tracks the system's own interactions and relational status with the user:
+*   Logs promises made by the assistant, mistakes, repair cycles, and shared humor boundaries.
+*   Relational transactions are stored in a separate ledger table to keep system-action metadata decoupled from actual user-profile facts.
 
 ---
 
