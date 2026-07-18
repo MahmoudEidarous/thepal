@@ -1,88 +1,92 @@
 # 🌌 thepal
 
-> **An AI Friend with Perfect Local Memory.**  
-> *Samantha ("Her") meets a sharp-witted, candid best friend. Built entirely on Supermemory Local.*
+> **A local-first memory ledger engine and voice friend built on Supermemory Local.**  
+> *A canonical SQLite database, semantic mirror, and write-time enrichment pass that make local AI memory exact, grounded, and self-directing.*
 
 ---
 
-`thepal` is a voice-first memory companion that runs locally on your machine. Featuring a responsive, meteor-flecked WebGL constellation visualization, `thepal` speaks naturally, remembers every detail of your life, keeps your promises on a structured ledger, and roasts you like a real friend when you're forgetful.
+`thepal` is built on a core thesis: **Memory infrastructure is not the product; judgment, continuity, and initiative are.** 
+
+Instead of relying on naive vector search and chat history, `thepal` utilizes a structured local **SQLite evidence ledger** coupled with a high-speed **Supermemory Local** semantic mirror. It resolves facts, extracts commitments, reconciles contradictions, and implements a unified attention gating flow—all running privately on your own machine.
 
 Built for the **Supermemory Local Hackathon, July 2026**.
 
 ---
 
-## ⚡ The Core Pillars
+## 🧠 The Memory Engine (The Hero)
 
-### 1. 🎙️ Organic Respiration & Sighs (Samantha Style)
-`thepal` sounds like there is a chest moving air in the room. By injecting realistic non-lexical guidelines into ElevenLabs, the agent will:
-*   Take a soft breath before answering a long question.
-*   Gasp lightly when surprised.
-*   Let out a quiet sigh `[sighs]` when reflecting or thinking.
+At the core of `thepal` is a multi-tier memory architecture designed to ensure zero hallucination, strict factual grounding, and high-integrity recall.
 
-### 2. 🎭 Uncensored Close-Friend Persona
-Say goodbye to corporate AI assistant pleasantries. `thepal` talks to you like a genuine best friend:
-*   **Banned**: *"Certainly!"*, *"Great question!"*, *"I am happy to help!"*.
-*   **Authentic Vernacular**: Uses contractions, casual slang, and natural swearing (*shit, fuck, damn, ass*) when expressing real emotion, humor, or frustration.
-*   **Playful Banter**: Roasts you if you forget your own appointments or change your mind.
+```
+                 You (Voice / Files)
+                          │
+                          ▼
+            Write-Time Enrichment Pass
+             (Categorize, Date, Align)
+                          │
+        ┌─────────────────┴─────────────────┐
+        ▼                                   ▼
+ SQLite Ledger (.recall/)           Supermemory Local (port 6767)
+  (Canonical Truth, Threads,         (High-speed Semantic Index
+   Attentions, Relationships)         & Vector Search Mirror)
+```
 
-### 3. ⏳ Dynamic "Inner Monologue" Latency Masking
-Instead of dead silence while database tools run, the Pal speaks a quick, context-aware, organic filler thought *while* the lookup executes:
-*   *Example (Roast)*: `[sighs] "Wait, you actually forgot that? Let me check the database..."`
-*   *Example (Puzzled)*: `[chuckles] "Wait, what? Let me pull up what you said about him..."`
-*   Keeps the conversation flowing seamlessly without robotic pauses.
+### 1. The SQLite Canonical Ledger
+`thepal` does not treat vector search as the source of truth. Instead, it maintains a strict, relational SQLite database (`.recall/memory.sqlite`) tracking:
+*   **Temporal Beliefs**: Facts structured as `subject · predicate: value` with confidence scores and conflict resolutions.
+*   **Life Threads**: Ongoing, long-term narrative connections across sessions.
+*   **Prospective Triggers**: Commitments and tasks anchored to specific calendar dates.
+*   **Attention Decisions**: A history of proactive statements the agent considered, gating reasons, and outcomes.
 
-### 4. 📟 Brand-Logo Diagnostics Panel
-Hover over the logo text **`the pal`** in the top-left corner—the indicator dot turns green and pulses. **Click it** to slide open a beautiful, retro-futuristic monospace developer HUD overlay read live from the SQLite database. It tracks:
-*   SQLite integrity status (`ok`).
-*   Active ledger records (Events, Claims, Resolved Beliefs, Life Threads, and Reminders).
-*   Active Supermemory Mirror sync counts.
+### 2. Write-Time Enrichment Envelope (`lib/envelope.ts`)
+No text enters the memory pool raw. Every input is classified, resolved, and structured:
+*   **Type Parsing**: Categorized into `fact`, `taste`, `decision`, `commitment`, `boundary`, `safety`, `event`, or `impression`.
+*   **Temporal Resolution**: Relative timestamps (*"next Friday at 4"*) are resolved to absolute ISO-8601 calendar dates at the moment of capture.
+*   **Search Enrichment**: Key aliases, alternative phrasings, and query targets are embedded directly into the payload, ensuring differently-worded questions still trigger semantic matches.
 
-### 5. 🛡️ Absolute Privacy & Local Ownership
-Your data lives under your own roof:
-*   Every memory passes through a local write-time enrichment pass (`lib/envelope.ts`) resolving relative times (e.g., *"this Sunday"* → calendar dates).
-*   Private boundaries are pinned in-session, never sent to external LLMs.
-*   Forgetting is a ceremony: preview struck-through items before confirming deletion.
-*   Export your entire brain as a single **Obsidian-ready Markdown** file.
+### 3. Unified Attention Gating Flow (`lib/memory/attention-engine.ts`)
+To take initiative without becoming annoying, the Pal processes memory candidates (e.g. obligations, anniversaries, thread follow-ups) through **8 strict security gates** before authorizing a proactive remark:
+*   `user_permission` & `memory_space` matching.
+*   `source_grounding` (must be backed by direct database evidence).
+*   `sensitivity` limits (e.g., medical boundaries).
+*   `cooldown` metrics to prevent conversational spam.
+*   `repair_priority` (any database-logged "rupture" blocks all jokes until repair is resolved).
 
 ---
 
-## 🏗️ Architecture
+## 🎙️ The Voice & UI Experience (The Friend)
 
-```
-                 You (Voice/Mic) 
-                       │
-                       ▼
-             ElevenLabs Realtime Agent
-                       │
-             (browser client tools)
-                       │
-                       ▼
-            Next.js Server (localhost)
-                       │
-        ┌──────────────┴──────────────┐
-        ▼                             ▼
- SQLite Ledger (.recall/)      Supermemory Local (port 6767)
-  (Canonical Truth)             (Semantic Search Mirror)
-```
+Sitting directly on top of this robust memory engine is the expressive, human-like voice interface:
 
-Every voice agent tool is executed browser-side against local API endpoints, keeping all personal memory vectors and ledgers on your own machine.
+### 1. Uncensored Close-Friend Persona
+*   **No Assistant-Speak**: Banned words like *"Certainly!"* or *"I'm happy to help!"*.
+*   **Banter & Roasts**: The Pal behaves like a real companion. It teases you if you forget things, uses casual vernacular, and naturally swears (*shit, fuck, damn*) if you do.
+*   **Respiration**: Natively gasps, sighs, and takes realistic physical breaths during speech.
+
+### 2. "Inner Monologue" Latency Masking
+*   While database searches and vector matches execute, the Pal drops a quick, context-aware, organic filler thought to hold the line:
+    *   *Example*: `[sighs] "Wait, you actually forgot that? Let me check the database..."`
+    *   *Example*: `"Damn, let me dig into the work log for a second..."`
+
+### 3. Logo-Click Diagnostics Panel
+*   Click the **`the pal`** header logo in the UI to open a retro-monospace developer HUD showing live SQLite counts, database integrity checks, and mirror sync status.
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Installation & Quickstart
 
 ### Prerequisites
 *   [Supermemory Local Server](https://supermemory.ai) running on port `6767`.
 *   ElevenLabs API Key & OpenRouter API Key.
 *   Node.js 22.5+.
 
-### Setup & Run
-1.  **Clone & Configure environment**:
+### Setup
+1.  **Configure environment**:
     ```bash
     cp env.example .env.local
-    # Edit .env.local to fill in your API keys
+    # Edit .env.local and fill in keys
     ```
-2.  **Register the Voice Agent & client tools**:
+2.  **Build/Update ElevenLabs Realtime Voice Agent**:
     ```bash
     node scripts/create-voice-agent.mjs
     ```
@@ -90,7 +94,7 @@ Every voice agent tool is executed browser-side against local API endpoints, kee
     ```bash
     npm install
     ```
-4.  **Start the developer server**:
+4.  **Start the Next.js dev server**:
     ```bash
     npm run dev -- -p 3001
     ```
@@ -99,12 +103,4 @@ Every voice agent tool is executed browser-side against local API endpoints, kee
     npm run memory:preflight:runtime
     ```
 
-Open your browser to **[http://localhost:3001](http://localhost:3001)**, click the central orb, and start talking!
-
----
-
-## 🛠️ The Stack
-*   **Supermemory Local** — Vector search, memory extraction, and relational mapping.
-*   **ElevenLabs ConvAI** — Realtime conversational voice streaming with browser-side client tools.
-*   **Next.js 16 + Tailwind CSS** — Gorgeous minimalist front-end, WebGL shader orb, and pointer-parallax stars.
-*   **SQLite** — Canonical database for threads, attention, relationship logs, and diagnostics.
+Open **[http://localhost:3001](http://localhost:3001)** and connect your mic!

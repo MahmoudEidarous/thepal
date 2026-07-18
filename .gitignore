@@ -50,3 +50,7 @@ next-env.d.ts
 # eve runtime state (generated)
 /.eve/
 /.workflow-data/
+
+# local blueprint HTML files
+recall-*.html
+
