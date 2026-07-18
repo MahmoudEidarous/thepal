@@ -1,94 +1,110 @@
-# Recall
+# 🌌 thepal
 
-**A second brain you talk to — one that knows the difference between a database and a friend.**
+> **An AI Friend with Perfect Local Memory.**  
+> *Samantha ("Her") meets a sharp-witted, candid best friend. Built entirely on Supermemory Local.*
 
-Recall is a voice-first memory companion built on [Supermemory Local](https://supermemory.ai). One dark screen, one orb, your memories orbiting it as a living constellation. You speak; it remembers, connects, keeps your promises on a ledger, refuses to invent what you never said, forgets only with ceremony, and dreams about your day overnight.
+---
 
-Built for the Supermemory Local Hackathon, July 2026.
+`thepal` is a voice-first memory companion that runs locally on your machine. Featuring a responsive, meteor-flecked WebGL constellation visualization, `thepal` speaks naturally, remembers every detail of your life, keeps your promises on a structured ledger, and roasts you like a real friend when you're forgetful.
 
-## The thesis
+Built for the **Supermemory Local Hackathon, July 2026**.
 
-Memory infrastructure is not the product; **judgment, continuity, and initiative are**. Recall keeps canonical evidence, temporal truth, life threads, forward intentions, and behavioral policy locally. Supermemory Local supplies semantic retrieval, relations, and a compatibility mirror. Everything builds on three principles:
+---
 
-**1. Wisdom is written, not retrieved.** Every message — spoken, typed, or dropped as a file — passes through one write-time enrichment pass (`lib/envelope.ts`) before it becomes memory: type (fact / taste / decision / commitment / boundary / safety / event / impression), provenance (stated / inferred / affirmed), story-date resolved at capture ("last summer" → the actual year, "by Sunday" → a real date), emotional weight, salience, entities with aliases, and alternate phrasings **embedded into the stored text** so differently-worded questions still retrieve. Labels are written once; the read side collapses into dumb filters. The classifier wasn't trusted until it passed a 20-case write bank (`scripts/eval-envelope.mjs`) — safety, boundaries, secrets, and due dates are the critical cases.
+## ⚡ The Core Pillars
 
-**2. Hold uncertainty like a friend.** Facts are asserted; impressions are voiced tentatively ("am I reading that right?") and attributed honestly ("I had the impression…", never "you told me"). Ask about something you never said and Recall answers *"you haven't told me"* — zero fabrication by construction, because answers about you must come from actual search hits. Safety notes and boundaries are **pinned into every session at connect**, never dependent on retrieval again.
+### 1. 🎙️ Organic Respiration & Sighs (Samantha Style)
+`thepal` sounds like there is a chest moving air in the room. By injecting realistic non-lexical guidelines into ElevenLabs, the agent will:
+*   Take a soft breath before answering a long question.
+*   Gasp lightly when surprised.
+*   Let out a quiet sigh `[sighs]` when reflecting or thinking.
 
-**3. Initiative needs judgment.** Recall compiles memory, then an inspectable attention policy decides whether one thing deserves the room or whether silence is smarter. Exact prospective intentions can fire now; obligations, open threads, anniversaries, and changes are gated by grounding, sensitivity, timing, boundaries, and cooldowns. At night, the **Night Shift** dream agent re-reads what the day wrote, reconciles the ledger, flags contradictions, and leaves a morning briefing it can read aloud.
+### 2. 🎭 Uncensored Close-Friend Persona
+Say goodbye to corporate AI assistant pleasantries. `thepal` talks to you like a genuine best friend:
+*   **Banned**: *"Certainly!"*, *"Great question!"*, *"I am happy to help!"*.
+*   **Authentic Vernacular**: Uses contractions, casual slang, and natural swearing (*shit, fuck, damn, ass*) when expressing real emotion, humor, or frustration.
+*   **Playful Banter**: Roasts you if you forget your own appointments or change your mind.
 
-## What it does
+### 3. ⏳ Dynamic "Inner Monologue" Latency Masking
+Instead of dead silence while database tools run, the Pal speaks a quick, context-aware, organic filler thought *while* the lookup executes:
+*   *Example (Roast)*: `[sighs] "Wait, you actually forgot that? Let me check the database..."`
+*   *Example (Puzzled)*: `[chuckles] "Wait, what? Let me pull up what you said about him..."`
+*   Keeps the conversation flowing seamlessly without robotic pauses.
 
-- **Just talk.** Tap the orb. Tell it something worth keeping and watch the star materialize out of the orb into your constellation.
-- **Memory can take initiative without becoming notifications.** A unified attention layer considers the agenda, forward intentions, life threads, changes, and returning past; it authorizes at most one aside or records why silence won.
-- **Feed the sky.** Drag a Markdown note onto the constellation: secrets are stripped by local regex *before any model sees the text*, the note is enveloped, and deadlines buried inside it become ledger entries on their own.
-- **A constellation, not a list.** Stars sized and brightened by how connected they are; engine relations draw the filaments; inferred memories glow violet; click a star to see how it evolved, versions struck through. Click one mid-conversation and "what about this?" just works.
-- **Forgetting is a ceremony.** Preview first, struck-through approval sheet, nothing deleted until you click. Every deletion stored with a reason.
-- **Own the exit.** One click exports the whole brain — profile, boundaries, open commitments as checkboxes, memories with their evolution history — as a single Obsidian-ready Markdown file.
+### 4. 📟 Brand-Logo Diagnostics Panel
+Hover over the logo text **`the pal`** in the top-left corner—the indicator dot turns green and pulses. **Click it** to slide open a beautiful, retro-futuristic monospace developer HUD overlay read live from the SQLite database. It tracks:
+*   SQLite integrity status (`ok`).
+*   Active ledger records (Events, Claims, Resolved Beliefs, Life Threads, and Reminders).
+*   Active Supermemory Mirror sync counts.
 
-## Architecture
+### 5. 🛡️ Absolute Privacy & Local Ownership
+Your data lives under your own roof:
+*   Every memory passes through a local write-time enrichment pass (`lib/envelope.ts`) resolving relative times (e.g., *"this Sunday"* → calendar dates).
+*   Private boundaries are pinned in-session, never sent to external LLMs.
+*   Forgetting is a ceremony: preview struck-through items before confirming deletion.
+*   Export your entire brain as a single **Obsidian-ready Markdown** file.
+
+---
+
+## 🏗️ Architecture
 
 ```
- you (voice) ⇄ ElevenLabs agent ── client tool calls ──▶ browser
-                                                           │ fetch
-                                                           ▼
-                                            Next.js API (localhost)
-                                          ┌── canonical SQLite ledger ─┐
-                                          │ truth · threads · attention │
-                                          ▼                             ▼
-                              Supermemory Local (localhost:6767)    OpenRouter
-                               semantic index + local mirror      enrichment/extraction
+                 You (Voice/Mic) 
+                       │
+                       ▼
+             ElevenLabs Realtime Agent
+                       │
+             (browser client tools)
+                       │
+                       ▼
+            Next.js Server (localhost)
+                       │
+        ┌──────────────┴──────────────┐
+        ▼                             ▼
+ SQLite Ledger (.recall/)      Supermemory Local (port 6767)
+  (Canonical Truth)             (Semantic Search Mirror)
 ```
 
-Every agent tool is a *client tool*: it executes in your browser against local API routes. ElevenLabs carries audio and tool calls; **your memories are stored on your machine**. Model inference (voice LLM, enrichment, extraction) uses hosted models today — every one of them is swappable, point them at local models and the loop is airgapped.
+Every voice agent tool is executed browser-side against local API endpoints, keeping all personal memory vectors and ledgers on your own machine.
 
-The durable memory source of truth is now the local SQLite evidence ledger in
-`.recall/memory.sqlite`. Claims, temporal beliefs, life threads, prospective
-memory, dossiers, emotional arcs, routines, and week/month views are derived
-from that evidence. A separate relationship ledger records Recall's own
-promises, mistakes, repairs, explicit delivery feedback, boundaries, and
-shared-humor lifecycle without turning any of them into facts about the user.
-Supermemory Local remains the semantic index, relation
-engine, and compatibility mirror; its summaries and metadata never outrank the
-canonical ledger. See [Phase 6 human continuity](docs/memory-continuity-phase-6.md)
-[Phase 7 unified attention](docs/memory-attention-phase-7.md), and
-[Phase 8 relationship intelligence](docs/memory-relationship-phase-8.md).
-[Phase 9 operational hardening](docs/memory-hardening-phase-9.md) adds one
-privacy-safe health contract and one complete release command;
-it deliberately adds no new cognitive layer.
+---
 
-## Run it
+## 🚀 Getting Started
 
-You need [Supermemory Local](https://supermemory.ai) (`supermemory-server`, port 6767), an ElevenLabs API key, an OpenRouter key, and Node 22.5+.
+### Prerequisites
+*   [Supermemory Local Server](https://supermemory.ai) running on port `6767`.
+*   ElevenLabs API Key & OpenRouter API Key.
+*   Node.js 22.5+.
 
-```bash
-cp env.example .env.local             # fill in your keys
-node scripts/create-voice-agent.mjs   # creates/updates the voice agent and client tools
-npm install
-npm run dev
-node scripts/eval-envelope.mjs        # optional: prove the write envelope on the 20-case bank
-npm run eval:memory-release           # run the complete memory release gate
-```
+### Setup & Run
+1.  **Clone & Configure environment**:
+    ```bash
+    cp env.example .env.local
+    # Edit .env.local to fill in your API keys
+    ```
+2.  **Register the Voice Agent & client tools**:
+    ```bash
+    node scripts/create-voice-agent.mjs
+    ```
+3.  **Install dependencies**:
+    ```bash
+    npm install
+    ```
+4.  **Start the developer server**:
+    ```bash
+    npm run dev -- -p 3001
+    ```
+5.  **Run preflight checks**:
+    ```bash
+    npm run memory:preflight:runtime
+    ```
 
-Open the app, tap the orb, allow the mic, and say something worth remembering. Add `?text` to the URL for a typed-only session (same agent, same tools, no mic).
+Open your browser to **[http://localhost:3001](http://localhost:3001)**, click the central orb, and start talking!
 
-`RECALL_ATTENTION_MODE=guarded` is the safe default: exact prospective triggers
-may surface, while broader proactive candidates remain visible only in the
-privacy-safe audit trace. Use `shadow` to suppress every proactive class; do not
-use `active` until replay review clears the exit criteria in the Phase 7 doc.
+---
 
-`RECALL_RELATIONSHIP_MODE=guarded` keeps the stable Recall persona active while
-applying only explicit user feedback. Repeated implicit delivery outcomes and
-shared callbacks remain shadow data until `active`; repair and boundaries are
-enforced in every mode.
-
-## Stack
-
-- **Supermemory Local** — memory extraction, evolution, relations, search, soft-forget. The warehouse.
-- **ElevenLabs Agents** (`@elevenlabs/react`) — realtime conversation and browser-side client tools; boundaries, memory inventory, and the current attention decision are injected at connect.
-- **Next.js 16 + Tailwind 4** — one screen; WebGL shader orb; constellation with pointer parallax.
-- **eve + deepseek-v4 (OpenRouter)** — the write envelope by day, the Night Shift editor at 3am.
-
-## Notes
-
-- All keys live in `.env.local` (gitignored). Nothing sensitive is committed; a full-history scan is part of the release checklist.
-- The forget flow is built on the engine's real primitives (`/v4/search` → `DELETE /v4/memories` with a stored reason) — no destructive shortcuts.
+## 🛠️ The Stack
+*   **Supermemory Local** — Vector search, memory extraction, and relational mapping.
+*   **ElevenLabs ConvAI** — Realtime conversational voice streaming with browser-side client tools.
+*   **Next.js 16 + Tailwind CSS** — Gorgeous minimalist front-end, WebGL shader orb, and pointer-parallax stars.
+*   **SQLite** — Canonical database for threads, attention, relationship logs, and diagnostics.
