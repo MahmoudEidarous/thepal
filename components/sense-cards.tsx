@@ -878,21 +878,22 @@ function DockItem({
 }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settled = card.status !== "loading";
+  const activeTtl = card.ttl ?? 10_000;
 
   useEffect(() => {
-    if (!card.ttl || !settled) return;
-    timer.current = setTimeout(dismiss, card.ttl);
+    if (!settled) return;
+    timer.current = setTimeout(dismiss, activeTtl);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [card.ttl, settled]);
+  }, [activeTtl, settled]);
 
   const hold = () => {
     if (timer.current) clearTimeout(timer.current);
   };
   const release = () => {
-    if (card.ttl && settled) timer.current = setTimeout(dismiss, 2_500);
+    if (settled) timer.current = setTimeout(dismiss, 2_500);
   };
 
   return (
