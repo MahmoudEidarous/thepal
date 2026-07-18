@@ -18,7 +18,19 @@ export default function Home() {
   const [name, setName] = useState<string | undefined>(undefined);
   const [dragging, setDragging] = useState(false);
   const [dropNote, setDropNote] = useState<string | null>(null);
+  const [showDiagnostic, setShowDiagnostic] = useState(false);
+  const [diagnosticData, setDiagnosticData] = useState<any>(null);
   const dragDepth = useRef(0);
+
+  const fetchDiagnostics = async () => {
+    try {
+      const res = await fetch("/api/dev/diagnostics");
+      if (res.ok) {
+        const data = await res.json();
+        setDiagnosticData(data);
+      }
+    } catch {}
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -45,6 +57,14 @@ export default function Home() {
     }, 4_000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowDiagnostic(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   // First name for the greeting, pulled from the profile itself.
   useEffect(() => {
@@ -138,9 +158,16 @@ export default function Home() {
 
       {/* chrome */}
       <header className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-6 py-5">
-        <div className="flex items-baseline gap-1 text-[16px] font-semibold tracking-tight text-white">
+        <div
+          onClick={() => {
+            fetchDiagnostics();
+            setShowDiagnostic(true);
+          }}
+          className="flex items-baseline gap-1 text-[16px] font-semibold tracking-tight text-white cursor-pointer select-none group"
+          title="Open Diagnostics"
+        >
           the pal
-          <span className="inline-block size-[5px] rounded-full bg-blue-400" />
+          <span className="inline-block size-[5px] rounded-full bg-blue-400 group-hover:bg-emerald-400 group-hover:scale-150 transition-all duration-300" />
         </div>
         <div className="flex items-center gap-3">
           <div className="glass-chip flex items-center gap-2 rounded-full px-3.5 py-2">
@@ -237,6 +264,47 @@ export default function Home() {
         <p className="glass-chip animate-rise absolute bottom-20 left-1/2 z-[70] -translate-x-1/2 rounded-full px-4 py-2 font-mono text-[10.5px] tracking-[0.12em] text-zinc-300">
           {dropNote}
         </p>
+      )}
+
+      {showDiagnostic && diagnosticData && (
+        <div className="absolute inset-0 z-[80] flex items-center justify-center bg-black/85 backdrop-blur-md p-6 overflow-y-auto">
+          <div className="relative w-full max-w-xl border border-zinc-800 bg-zinc-950/90 rounded-2xl p-6 font-mono text-[11px] text-zinc-300 shadow-2xl animate-rise">
+            <button
+              onClick={() => setShowDiagnostic(false)}
+              className="absolute top-4 right-4 text-zinc-500 hover:text-zinc-200 transition-colors text-[10px] border border-zinc-850 rounded px-2.5 py-1 tracking-wide uppercase hover:bg-zinc-900"
+            >
+              CLOSE
+            </button>
+            <div className="flex items-center gap-2 border-b border-zinc-900 pb-4 mb-4">
+              <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="font-semibold text-white tracking-wide uppercase">the pal diagnostics</span>
+            </div>
+            <div className="grid grid-cols-2 gap-y-2.5 gap-x-6 border-b border-zinc-900 pb-4 mb-4">
+              <div>Database: <span className="text-zinc-400">{diagnosticData.stats.databasePath.split("/").pop()}</span></div>
+              <div>Integrity: <span className="text-emerald-400 font-semibold">{diagnosticData.stats.integrity}</span></div>
+              <div>Schema Version: <span className="text-white">{diagnosticData.stats.schemaVersion}</span></div>
+              <div>Service: <span className="text-emerald-400">ONLINE</span></div>
+            </div>
+            <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+              <div className="text-white font-semibold mb-2 uppercase text-[10px] tracking-wider text-zinc-400">Ledger Metrics</div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Memory Events:</span> <span className="text-emerald-400">{diagnosticData.stats.events}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Claims:</span> <span className="text-emerald-400">{diagnosticData.stats.claims}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Resolved Beliefs:</span> <span className="text-emerald-400">{diagnosticData.stats.beliefs}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Life Threads:</span> <span className="text-emerald-400">{diagnosticData.stats.threads}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Prospective Reminders:</span> <span className="text-emerald-400">{diagnosticData.stats.prospective}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Attention Decisions:</span> <span className="text-emerald-400">{diagnosticData.stats.attentionDecisions}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Attention Outcomes:</span> <span className="text-emerald-400">{diagnosticData.stats.attentionOutcomes}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Learned Associations:</span> <span className="text-emerald-400">{diagnosticData.stats.associations}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Consolidation Runs:</span> <span className="text-emerald-400">{diagnosticData.stats.consolidationRuns}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Continuity Kernels:</span> <span className="text-emerald-400">{diagnosticData.stats.continuityKernels}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Relationship Events:</span> <span className="text-emerald-400">{diagnosticData.stats.relationshipEvents}</span></div>
+              <div className="flex justify-between border-b border-zinc-900/50 py-0.5"><span>• Supermemory Mirrors:</span> <span className="text-emerald-400">{diagnosticData.stats.mirrors}</span></div>
+            </div>
+            <div className="mt-4 pt-4 border-t border-zinc-900 text-zinc-500 text-[9px] text-center uppercase tracking-widest">
+              press ESC or click close to return to the constellation
+            </div>
+          </div>
+        </div>
       )}
 
       {/* film grain over the whole scene */}
