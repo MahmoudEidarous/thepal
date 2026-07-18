@@ -54,3 +54,6 @@ next-env.d.ts
 # local blueprint HTML files
 recall-*.html
 
+# AI Assistant configuration files
+CLAUDE.md
+AGENTS.md
