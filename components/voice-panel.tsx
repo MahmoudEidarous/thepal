@@ -7,13 +7,6 @@ import { DEMO_CARDS, SenseDock, type MoodData, type SenseCard, type WebSource } 
 import { DEMO_STORY, StoryOverlay, type StoryBeat, type StoryState } from "./story-mode";
 import { fetchWeather, geocode, locate, weatherOneLiner, type Place } from "@/lib/senses";
 import { hasLatestUserTranscriptEvidence } from "@/lib/memory/relationship-source-policy";
-import {
-  formatKnowledgeRoute,
-  knowledgeToolAllowed,
-  routeKnowledgeTurn,
-  type KnowledgeRetrievalTool,
-  type KnowledgeRoute,
-} from "@/lib/knowledge-router";
 
 type Line = { role: "user" | "agent"; text: string };
 type Activity = { id: number; label: string };
@@ -342,10 +335,14 @@ function VoiceCore({
   const prospectiveSeenRef = useRef(new Set<string>());
   const contextTurnRef = useRef(0);
   const turnControllersRef = useRef(new Set<AbortController>());
-  const knowledgeRouteRef = useRef<{ turn: number; decision: KnowledgeRoute } | null>(null);
-  const [knowledgeRouteView, setKnowledgeRouteView] = useState<KnowledgeRoute | null>(null);
+  const memoryObservationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const modelWrittenTurnsRef = useRef(new Set<number>());
+  const autoCapturedTurnsRef = useRef(new Set<number>());
+  const manualMemoryWriteCountsRef = useRef(new Map<number, number>());
   const bargeInRef = useRef(false);
   const bargeDetectedAtRef = useRef<number | null>(null);
+  const vadBargeStartedAtRef = useRef<number | null>(null);
+  const vadBargeFramesRef = useRef(0);
   const lastUserVoiceAtRef = useRef<number | null>(null);
   const replyTimingRef = useRef<{
     turn: number;
@@ -587,25 +584,6 @@ function VoiceCore({
     [turnJson],
   );
 
-  const setTurnKnowledgeRoute = useCallback(
-    (turn: number, decision: KnowledgeRoute) => {
-      knowledgeRouteRef.current = { turn, decision };
-      if (showLatency) setKnowledgeRouteView(decision);
-    },
-    [showLatency],
-  );
-
-  const gateKnowledgeTool = useCallback(
-    (tool: KnowledgeRetrievalTool) => {
-      const active = knowledgeRouteRef.current;
-      if (!active || active.turn !== contextTurnRef.current) return null;
-      if (knowledgeToolAllowed(active.decision, tool)) return null;
-      recordLatency(`tool · ${tool} suppressed`, 0, "fallback");
-      return `SOURCE ROUTER BLOCKED ${tool}: the current turn is ${active.decision.kind} · ${active.decision.domain}. Do not mention routing, tools, or this block. Follow the newest knowledge route and answer naturally without retrieval.`;
-    },
-    [recordLatency],
-  );
-
   const clearLullTimer = useCallback(() => {
     if (lullTimerRef.current) clearTimeout(lullTimerRef.current);
     lullTimerRef.current = null;
@@ -707,45 +685,129 @@ function VoiceCore({
             firstAudioRecorded: false,
           };
           const recentTurns = [...linesRef.current.slice(-7), { role: "user" as const, text: message }];
-          const localRoute = routeKnowledgeTurn({ query: message, recentTurns, selectedMemory });
-          setTurnKnowledgeRoute(turn, localRoute);
-          try {
-            conversationRef.current.sendContextualUpdate(formatKnowledgeRoute(localRoute));
-          } catch {}
-          void turnPostJson("/api/context/compile", {
-            query: message,
-            sessionId: sessionIdRef.current,
-            momentKind: "user_turn",
-            recentTurns,
-            selectedMemory,
-            seenProspective: [...prospectiveSeenRef.current],
-            // This pass chooses whether memory should interrupt. Semantic
-            // history is fetched only if the agent actually needs to answer
-            // from memory, avoiding two Supermemory searches for one turn.
-            includeHistory: false,
-            includeProspective: prospectiveEnabledRef.current,
-            maxTokens: 1_400,
-          })
-            .then((data) => {
-              if (turn !== contextTurnRef.current) return;
-              if (data.knowledgeRoute) {
-                setTurnKnowledgeRoute(turn, data.knowledgeRoute as KnowledgeRoute);
-              }
-              const surfaced = data.attention?.surface as
-                | { kind?: string; sourceItemId?: string }
-                | null
-                | undefined;
-              registerAttentionSurface(data.attention, turn);
-              if (surfaced?.kind === "prospective" && surfaced.sourceItemId) {
-                prospectiveSeenRef.current.add(surfaced.sourceItemId);
-              }
+          // Source choice belongs to the model's standing policy. There is no
+          // per-turn browser classification or contextual update here: either
+          // one could overrule meaning and restart a speculative voice reply.
+
+          // Speaking and remembering are independent jobs. The voice model
+          // may save immediately, but a silent background observer also sees
+          // every finalized user turn so a warm, flowing reply cannot cause
+          // relationship texture or life context to vanish. This queue is
+          // deliberately NOT cancelled by a newer turn: evidence remains
+          // true even after the conversation moves on.
+          const observationContext = linesRef.current.slice(-8);
+          memoryObservationQueueRef.current = memoryObservationQueueRef.current
+            .catch(() => {})
+            .then(async () => {
+              const startedAt = performance.now();
               try {
-                if (typeof data.agentText === "string") {
-                  conversationRef.current.sendContextualUpdate(data.agentText);
+                const data = await postJson("/api/memory/observe", {
+                  text: message,
+                  recentTurns: observationContext,
+                  sessionId: sessionIdRef.current,
+                  turn,
+                });
+                recordLatency(
+                  "memory · background observer",
+                  performance.now() - startedAt,
+                );
+                if (!data.captured) return;
+                autoCapturedTurnsRef.current.add(turn);
+                if (modelWrittenTurnsRef.current.has(turn)) return;
+                pushCard({
+                  id: ++seq.current,
+                  kind: "filed",
+                  status: "ready",
+                  text: typeof data.text === "string" ? data.text : message,
+                  ttl: 8_000,
+                });
+              } catch {
+                recordLatency(
+                  "memory · background observer",
+                  performance.now() - startedAt,
+                  "error",
+                );
+              } finally {
+                const floor = turn - 60;
+                for (const seen of modelWrittenTurnsRef.current) {
+                  if (seen < floor) modelWrittenTurnsRef.current.delete(seen);
                 }
-              } catch {}
+                for (const seen of autoCapturedTurnsRef.current) {
+                  if (seen < floor) autoCapturedTurnsRef.current.delete(seen);
+                }
+                for (const seen of manualMemoryWriteCountsRef.current.keys()) {
+                  if (seen < floor) manualMemoryWriteCountsRef.current.delete(seen);
+                }
+              }
+            });
+
+          // Prospective matching is a cheap canonical lookup. The expensive
+          // attention compiler runs only after an actual topic match instead
+          // of shipping the whole memory board on every casual turn.
+          if (prospectiveEnabledRef.current) {
+            const matchStartedAt = performance.now();
+            void turnPostJson("/api/prospective", {
+              operation: "match",
+              context: message,
+              seen: [...prospectiveSeenRef.current],
             })
-            .catch(() => {});
+              .then((matched) => {
+                recordLatency("attention · prospective match", performance.now() - matchStartedAt);
+                if (turn !== contextTurnRef.current || !matched.match) return null;
+                return turnPostJson("/api/context/compile", {
+                  query: message,
+                  sessionId: sessionIdRef.current,
+                  momentKind: "user_turn",
+                  recentTurns,
+                  selectedMemory,
+                  seenProspective: [...prospectiveSeenRef.current],
+                  includeHistory: false,
+                  includePins: true,
+                  includeObligations: false,
+                  includeAnniversaries: false,
+                  includeProspective: true,
+                  maxTokens: 500,
+                });
+              })
+              .then((data) => {
+                if (!data || turn !== contextTurnRef.current) return;
+                const surfaced = data.attention?.surface as
+                  | {
+                      kind?: string;
+                      sourceItemId?: string;
+                      text?: string;
+                      instruction?: string;
+                      whyNow?: string;
+                    }
+                  | null
+                  | undefined;
+                if (surfaced?.kind !== "prospective" || !surfaced.sourceItemId) return;
+                registerAttentionSurface(data.attention, turn);
+                prospectiveSeenRef.current.add(surfaced.sourceItemId);
+                try {
+                  conversationRef.current.sendContextualUpdate(
+                    [
+                      "RECALL ATTENTION DECISION attention-v2",
+                      "PROACTIVE ASIDE AUTHORIZED",
+                      `kind=prospective; id=${surfaced.sourceItemId}`,
+                      `Memory: ${surfaced.text ?? "a requested next-time reminder matched"}`,
+                      `Instruction: ${surfaced.instruction ?? "Fire it once, then deliver it naturally."}`,
+                      `Why now: ${surfaced.whyNow ?? "the requested topic returned"}`,
+                      "This is the only authorized aside. Never mention matching, IDs, policy, or machinery.",
+                    ].join("\n"),
+                  );
+                } catch {}
+              })
+              .catch((error) => {
+                if (!(error instanceof StaleTurnError)) {
+                  recordLatency(
+                    "attention · prospective match",
+                    performance.now() - matchStartedAt,
+                    "error",
+                  );
+                }
+              });
+          }
         }
       } else {
         lastAgentLine.current = message;
@@ -769,21 +831,39 @@ function VoiceCore({
     },
     onVadScore: ({ vadScore }) => {
       const now = performance.now();
-      if (vadScore >= 0.55) {
+      if (vadScore >= 0.45) {
         lastUserVoiceAtRef.current = now;
         clearLullTimer();
       }
-      if (!isSpeakingRef.current || vadScore < 0.72 || bargeInRef.current) return;
+      if (!isSpeakingRef.current || bargeInRef.current) {
+        vadBargeStartedAtRef.current = null;
+        vadBargeFramesRef.current = 0;
+        return;
+      }
+      if (vadScore < 0.72) {
+        vadBargeStartedAtRef.current = null;
+        vadBargeFramesRef.current = 0;
+        return;
+      }
+      vadBargeStartedAtRef.current ??= now;
+      vadBargeFramesRef.current += 1;
+      const sustained =
+        vadBargeFramesRef.current >= 2 && now - vadBargeStartedAtRef.current >= 160;
+      const decisive = vadScore >= 0.96 && vadBargeFramesRef.current >= 2;
+      if (!sustained && !decisive) return;
 
-      // Server interruption is authoritative, but muting locally on the first
-      // confident speech frame means the user never has to talk over queued
-      // audio while that event makes the round trip.
+      // A single cough, laugh, desk knock, or acknowledgment must not kill a
+      // sentence. Once speech survives the short confirmation window, yield
+      // immediately while the authoritative server interruption catches up.
       bargeInRef.current = true;
       bargeDetectedAtRef.current = now;
+      vadBargeStartedAtRef.current = null;
+      vadBargeFramesRef.current = 0;
       duckedRef.current = true;
       beginUserTurn();
       clearStoryFlips();
       try {
+        conversationRef.current.sendUserActivity();
         conversationRef.current.setVolume({ volume: 0.01 });
       } catch {}
     },
@@ -805,10 +885,19 @@ function VoiceCore({
     },
     onModeChange: ({ mode }) => {
       setConversationMode(mode);
-      if (mode !== "listening") {
+      if (mode === "speaking") {
+        const timing = replyTimingRef.current;
+        if (timing && timing.turn === contextTurnRef.current && !timing.firstAudioRecorded) {
+          const now = performance.now();
+          timing.firstAudioRecorded = true;
+          recordLatency("speech end → first audio", now - timing.speechEndedAt);
+          recordLatency("transcript → first audio", now - timing.transcriptAt);
+        }
         clearLullTimer();
         return;
       }
+      vadBargeStartedAtRef.current = null;
+      vadBargeFramesRef.current = 0;
       if (bargeInRef.current) {
         bargeInRef.current = false;
         bargeDetectedAtRef.current = null;
@@ -916,10 +1005,9 @@ function VoiceCore({
 
   // The instant yield. Server-side interruption takes a beat (the ASR
   // has to transcribe the user's first word before it cuts the agent);
-  // until it lands she keeps playing over them. So the mic is watched
-  // locally: the user's voice rising while she speaks ducks her volume
-  // under them within ~120ms if server VAD has not already done it, and
-  // the real interruption finishes the cut. False alarms restore shortly.
+  // until it lands she keeps playing over them. The mic is watched locally,
+  // but only sustained, strong input may duck her; one noisy frame is a
+  // backchannel candidate, not an interruption.
   const duckedRef = useRef(false);
   useEffect(() => {
     if (!connected) return;
@@ -947,16 +1035,19 @@ function VoiceCore({
         if (duckedRef.current) restore();
         return;
       }
-      if (input > 0.09) {
+      if (input > 0.075) {
         voiceTicks += 1;
         quietTicks = 0;
-        if (voiceTicks >= 2 && !duckedRef.current) {
+        if (voiceTicks >= 5 && !duckedRef.current) {
           duckedRef.current = true;
           if (!bargeInRef.current) {
             bargeInRef.current = true;
             bargeDetectedAtRef.current = performance.now();
             beginUserTurn();
             clearStoryFlips();
+            try {
+              c.sendUserActivity();
+            } catch {}
           }
           try {
             c.setVolume({ volume: 0.01 });
@@ -1071,6 +1162,8 @@ function VoiceCore({
         selectedMemory,
         includeProspective: false,
         includeAnniversaries: false,
+        includePins: false,
+        includeObligations: false,
         focusMode: true,
         maxTokens: 1_600,
       };
@@ -1084,11 +1177,12 @@ function VoiceCore({
         includeObligations: false,
       });
       recordLatency("memory · canonical", performance.now() - canonicalStartedAt);
+      const semanticBudgetMs = Math.max(0, 700 - (performance.now() - startedAt));
       let budgetTimer: ReturnType<typeof setTimeout> | undefined;
       const withinBudget = await Promise.race([
         fullPromise.then((data) => ({ data, full: true as const })),
         new Promise<{ data: null; full: false }>((resolve) => {
-          budgetTimer = setTimeout(() => resolve({ data: null, full: false }), 900);
+          budgetTimer = setTimeout(() => resolve({ data: null, full: false }), semanticBudgetMs);
         }),
       ]);
       if (budgetTimer) clearTimeout(budgetTimer);
@@ -1096,7 +1190,7 @@ function VoiceCore({
       if (withinBudget.full) {
         recordLatency("memory · semantic", performance.now() - startedAt);
       } else {
-        recordLatency("memory · semantic budget", 900, "fallback");
+        recordLatency("memory · semantic budget", 700, "fallback");
         void fullPromise
           .then((late) => {
             recordLatency("memory · semantic", performance.now() - startedAt);
@@ -1105,7 +1199,7 @@ function VoiceCore({
               text: string;
               metadata?: { toldAt?: string | null };
             }>;
-            if (!lateHistory.length || typeof late.agentText !== "string") return;
+            if (!lateHistory.length) return;
             pushCard({
               id: ++seq.current,
               kind: "receipts",
@@ -1116,11 +1210,6 @@ function VoiceCore({
               })),
               ttl: 10_000,
             });
-            try {
-              conversationRef.current.sendContextualUpdate(
-                `Late semantic evidence for the CURRENT turn arrived:\n${late.agentText}\nUse it only if you are still answering that exact turn. Never interrupt a newer user turn or restart an answer to announce it.`,
-              );
-            } catch {}
           })
           .catch(() => {});
       }
@@ -1222,7 +1311,7 @@ function VoiceCore({
       const pendingPresence = presencePreparePromiseRef.current ?? primePresence(true);
       prepared = await Promise.race([
         pendingPresence,
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 900)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 120)),
       ]);
     }
     sessionIdRef.current = prepared?.sessionId ?? crypto.randomUUID();
@@ -1252,28 +1341,29 @@ function VoiceCore({
           setTimeout(() => resolve({ senses: null, timedOut: true }), 350),
         ),
       ]);
+      const fallbackPresence = {
+        opening: "Hey.",
+        plan: {
+          act: "simple_presence",
+          utterance: "Hey.",
+          candidateKind: null,
+        },
+        attention: null,
+        attentionText: "",
+        relationshipText: "",
+        presenceText:
+          "RECALL PRESENCE PLAN presence-planner-v1\nmoment=session_start; action=speak; act=simple_presence\nNatural line: \"Hey.\"",
+      };
       const presencePromise = prepared
         ? postJson("/api/presence/plan", {
             action: "consume",
             planId: prepared.planId,
             sessionId: sessionIdRef.current,
             momentKind: "session_start",
-          }).catch(() =>
-            postJson("/api/presence/plan", {
-              action: "plan_and_commit",
-              sessionId: sessionIdRef.current,
-              momentKind: "session_start",
-              greetingName: greetingName ?? null,
-            }),
-          )
-        : postJson("/api/presence/plan", {
-            action: "plan_and_commit",
-            sessionId: sessionIdRef.current,
-            momentKind: "session_start",
-            greetingName: greetingName ?? null,
-          });
+          }).catch(() => fallbackPresence)
+        : Promise.resolve(fallbackPresence);
       const [
-        res,
+        connectionData,
         agendaData,
         pinnedData,
         briefingData,
@@ -1282,7 +1372,21 @@ function VoiceCore({
         kernelData,
         sensed,
       ] = await Promise.all([
-        fetch("/api/voice/signed-url"),
+        (async () => {
+          const tokenResponse = await fetch("/api/voice/token");
+          const tokenData = await tokenResponse.json().catch(() => ({}));
+          if (tokenResponse.ok && typeof tokenData.conversationToken === "string") {
+            return tokenData as { conversationToken: string };
+          }
+          // WebRTC is preferred, but a regional LiveKit outage should not
+          // make the demo unusable. WebSocket remains the transport fallback.
+          const socketResponse = await fetch("/api/voice/signed-url");
+          const socketData = await socketResponse.json().catch(() => ({}));
+          if (!socketResponse.ok || typeof socketData.signedUrl !== "string") {
+            throw new Error(socketData.error ?? tokenData.error ?? "couldn't reach ElevenLabs");
+          }
+          return socketData as { signedUrl: string };
+        })(),
         fetch("/api/agenda")
           .then((r) => (r.ok ? r.json() : { commitments: [] }))
           .catch(() => ({ commitments: [] })),
@@ -1292,19 +1396,7 @@ function VoiceCore({
         fetch("/api/briefings")
           .then((r) => (r.ok ? r.json() : { briefings: [] }))
           .catch(() => ({ briefings: [] })),
-        presencePromise.catch(() => ({
-          opening: "Hey.",
-          plan: {
-            act: "simple_presence",
-            utterance: "Hey.",
-            candidateKind: null,
-          },
-          attention: null,
-          attentionText: "",
-          relationshipText: "",
-          presenceText:
-            "RECALL PRESENCE PLAN presence-planner-v1\nmoment=session_start; action=speak; act=simple_presence\nNatural line: \"Hey.\"",
-        })),
+        presencePromise.catch(() => fallbackPresence),
         fetch("/api/prospective")
           .then((r) => (r.ok ? r.json() : { triggers: [] }))
           .catch(() => ({ triggers: [] })),
@@ -1319,8 +1411,6 @@ function VoiceCore({
         sensesWithinStartBudget,
       ]);
       const senses = sensed.senses;
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "couldn't reach ElevenLabs");
 
       type AgendaItem = { content: string; due: string | null; overdue: boolean; dueToday: boolean };
       // nearest-due first, capped — a wall of ledger drowns the persona;
@@ -1430,8 +1520,15 @@ function VoiceCore({
       };
 
       conversation.startSession({
-        signedUrl: data.signedUrl,
-        connectionType: "websocket",
+        ...(typeof (connectionData as { conversationToken?: string }).conversationToken === "string"
+          ? {
+              conversationToken: (connectionData as { conversationToken: string }).conversationToken,
+              connectionType: "webrtc" as const,
+            }
+          : {
+              signedUrl: (connectionData as { signedUrl: string }).signedUrl,
+              connectionType: "websocket" as const,
+            }),
         dynamicVariables: {
           today: new Date().toLocaleDateString("en-CA"),
           weekday: new Date().toLocaleDateString("en-US", { weekday: "long" }),
@@ -1450,7 +1547,7 @@ function VoiceCore({
               : "RECALL PRESENCE PLAN unavailable; use a plain greeting and do not introduce memory proactively.",
           continuity_kernel: continuityKernel,
           knowledge_route:
-            "No active user turn yet. Wait for the newest RECALL KNOWLEDGE ROUTE block before using a retrieval tool.",
+            "You own source selection. Use no tool, one tool, or several tools according to the standing source policy and the meaning of the live conversation.",
           place: placeText,
           opening,
         },
@@ -1586,42 +1683,53 @@ function VoiceCore({
               const ruptureStatus = data.state?.rupture?.status ?? "none";
               return `Relationship event recorded as ${data.event.id}. Rupture status: ${ruptureStatus}. Do not announce the logging. If this is a mistake or rupture, repair it now: name the specific failure, own it, correct it, and skip humor.`;
             }),
-          search_memories: ({ query }: { query: string }) => {
-            const blocked = gateKnowledgeTool("search_memories");
-            return blocked
-              ? Promise.resolve(blocked)
-              : track("searching memories", () => memoryContextForTurn(query));
-          },
-          get_profile: () => {
-            const blocked = gateKnowledgeTool("get_profile");
-            return blocked ? Promise.resolve(blocked) : track("reading profile", async () => {
+          search_memories: ({ query }: { query: string }) =>
+            track("searching memories", () => memoryContextForTurn(query)),
+          get_profile: () =>
+            track("reading profile", async () => {
               const data = await turnJson("/api/profile");
               const stat = data.profile?.static ?? [];
               const dyn = data.profile?.dynamic ?? [];
               if (!stat.length && !dyn.length) return "The profile is empty so far.";
               return `Stable facts:\n${stat.join("\n")}\n\nRight now:\n${dyn.join("\n")}`;
-            });
-          },
+            }),
           // fire-and-forget: the agent never waits on the enricher. The
           // filing card shows what the envelope stamped — write path made
           // visible — and a failure comes back as a contextual update so
           // the agent can own it honestly.
           add_memory: ({ content, kind, due }: { content: string; kind?: string; due?: string }) => {
+            const turn = contextTurnRef.current;
+            modelWrittenTurnsRef.current.add(turn);
+            const writeCount = (manualMemoryWriteCountsRef.current.get(turn) ?? 0) + 1;
+            manualMemoryWriteCountsRef.current.set(turn, writeCount);
+            const alreadyFiled = autoCapturedTurnsRef.current.has(turn);
+            const latestUserEvidence = [...linesRef.current]
+              .reverse()
+              .find((line) => line.role === "user")?.text.trim();
             const id = ++seq.current;
             const startedAt = performance.now();
             let outcome: LatencyOutcome = "ok";
             setActivity((a) => [...a, { id, label: "remembering" }]);
-            pushCard({ id, kind: "filed", status: "loading", text: content, ttl: 8_000 });
+            if (!alreadyFiled) {
+              pushCard({ id, kind: "filed", status: "loading", text: content, ttl: 8_000 });
+            }
             void postJson("/api/capture", {
-              content,
+              // The tool's standalone phrasing helps its judgment and the
+              // card, but direct evidence is the user's transcript—not the
+              // model's paraphrase.
+              content: latestUserEvidence || content,
               kind: kind ?? "memory",
               due,
               source: "recall-voice",
+              idempotencyKey:
+                writeCount === 1
+                  ? `voice-turn:${sessionIdRef.current}:${turn}`
+                  : `voice-turn:${sessionIdRef.current}:${turn}:manual:${writeCount}`,
             })
               .then((d) => {
                 const e = d.envelope as EnvelopePayload | undefined;
                 if (!e) {
-                  updateCard(id, { status: "error" });
+                  if (!alreadyFiled) updateCard(id, { status: "error" });
                   return;
                 }
                 // The dedicated prospective tool is the preferred route,
@@ -1631,19 +1739,21 @@ function VoiceCore({
                 const conflict = d.conflict as
                   | { text: string; told?: string | null }
                   | undefined;
-                updateCard(id, {
-                  status: "ready",
-                  text: e.text ?? content,
-                  envelope: toFiled(e),
-                  // a reschedule quietly retired the old terms — show it
-                  ...(typeof d.superseded === "string" && !conflict?.text
-                    ? { replaces: d.superseded }
-                    : {}),
-                  // "this changes what I knew" — the collision, annotated
-                  ...(conflict?.text
-                    ? { updates: { text: conflict.text, told: conflict.told ?? null } }
-                    : {}),
-                });
+                if (!alreadyFiled && e) {
+                  updateCard(id, {
+                    status: "ready",
+                    text: e.text ?? content,
+                    envelope: toFiled(e),
+                    // a reschedule quietly retired the old terms — show it
+                    ...(typeof d.superseded === "string" && !conflict?.text
+                      ? { replaces: d.superseded }
+                      : {}),
+                    // "this changes what I knew" — the collision, annotated
+                    ...(conflict?.text
+                      ? { updates: { text: conflict.text, told: conflict.told ?? null } }
+                      : {}),
+                  });
+                }
                 if (conflict?.text) {
                   try {
                     conversationRef.current.sendContextualUpdate(
@@ -1656,7 +1766,7 @@ function VoiceCore({
               })
               .catch((err) => {
                 outcome = "error";
-                updateCard(id, { status: "error" });
+                if (!alreadyFiled) updateCard(id, { status: "error" });
                 try {
                   conversation.sendContextualUpdate(
                     `That last save actually failed (${err instanceof Error ? err.message : "engine error"}). Tell the user their memory didn't stick and offer to try again.`,
@@ -1709,9 +1819,8 @@ function VoiceCore({
                 throw error;
               }
             }),
-          get_prospective_memories: () => {
-            const blocked = gateKnowledgeTool("get_prospective_memories");
-            return blocked ? Promise.resolve(blocked) : track("checking future memories", async () => {
+          get_prospective_memories: () =>
+            track("checking future memories", async () => {
               const data = await turnJson("/api/prospective");
               const triggers = (data.triggers ?? []) as Array<{
                 id: string;
@@ -1730,8 +1839,7 @@ function VoiceCore({
                     )
                     .join("\n")}`
                 : "No open prospective memories.";
-            });
-          },
+            }),
           manage_prospective_memory: ({
             id,
             about,
@@ -1784,9 +1892,8 @@ function VoiceCore({
               const res = await postJson("/api/forget", { query: about, dryRun: false });
               return `Deleted ${res.count} memories. They are gone.`;
             }, null),
-          get_agenda: () => {
-            const blocked = gateKnowledgeTool("get_agenda");
-            return blocked ? Promise.resolve(blocked) : track("checking the ledger", async () => {
+          get_agenda: () =>
+            track("checking the ledger", async () => {
               const data = await turnJson("/api/agenda");
               const items = (data.commitments ?? []) as Array<{
                 content: string;
@@ -1806,8 +1913,7 @@ function VoiceCore({
                     )
                     .join("\n")}`
                 : "No open commitments. The ledger is clear.";
-            });
-          },
+            }),
           get_life_threads: ({
             query,
             status,
@@ -1816,10 +1922,8 @@ function VoiceCore({
             query?: string;
             status?: string;
             include_closed?: boolean;
-          } = {}) => {
-            const blocked = gateKnowledgeTool("get_life_threads");
-            if (blocked) return Promise.resolve(blocked);
-            return track("following life threads", async () => {
+          } = {}) =>
+            track("following life threads", async () => {
               const params = new URLSearchParams({
                 active:
                   include_closed || status === "dormant" || status === "resolved" ? "false" : "true",
@@ -1832,26 +1936,22 @@ function VoiceCore({
               return typeof data.agentText === "string"
                 ? data.agentText
                 : "The life-thread ledger did not return a usable view. Say that honestly and keep moving.";
-            });
-          },
+            }),
           get_continuity: ({
             view,
             about,
           }: {
             view: "dossier" | "week" | "month" | "routines" | "anniversaries" | "humor";
             about?: string;
-          }) => {
-            const blocked = gateKnowledgeTool("get_continuity");
-            if (blocked) return Promise.resolve(blocked);
-            return track("reading continuity", async () => {
+          }) =>
+            track("reading continuity", async () => {
               const params = new URLSearchParams({ view });
               if (about?.trim()) params.set("about", about.trim());
               const data = await turnJson(`/api/memory/continuity?${params.toString()}`);
               return typeof data.agentText === "string"
                 ? data.agentText
                 : "The continuity view did not return usable grounded state. Say that honestly; do not fill the gap from imagination.";
-            });
-          },
+            }),
           // closing a commitment can take seconds (settle-polling a doc
           // that's still filing) — the agent must not hold its breath.
           // Fire, react now, hear back only if the match missed.
@@ -1982,20 +2082,17 @@ function VoiceCore({
             })();
             return "The rewrite is filing — react to the change itself in one short line ('Friday it is') and keep talking. Never announce the edit. If it fails to land you'll get a note; own it then.";
           },
-          get_briefing: () => {
-            const blocked = gateKnowledgeTool("get_briefing");
-            return blocked ? Promise.resolve(blocked) : track("fetching briefing", async () => {
+          get_briefing: () =>
+            track("fetching briefing", async () => {
               const data = await turnJson("/api/briefings");
               const latest = data.briefings?.[0];
               return latest?.content ?? "No briefing yet — I haven't dreamed since we last spoke.";
-            });
-          },
+            }),
           // story mode — the voice and the constellation share one script.
           // advance_story returns exactly ONE chapter per call, so the
           // agent structurally cannot read ahead of the screen.
-          show_story: ({ topic }: { topic: string }) => {
-            const blocked = gateKnowledgeTool("show_story");
-            return blocked ? Promise.resolve(blocked) : track("setting the stage", async () => {
+          show_story: ({ topic }: { topic: string }) =>
+            track("setting the stage", async () => {
               const data = await turnPostJson("/api/story", { topic });
               const beats = (data.beats ?? []) as StoryBeat[];
               if (beats.length < 2)
@@ -2004,8 +2101,7 @@ function VoiceCore({
               return `The stage is lit: ${beats.length} chapters, ${beats[0].date} to ${
                 beats[beats.length - 1].date
               }. Call advance_story now. The tour flows on its own: narrate each chapter in one or two spoken sentences, then IMMEDIATELY call advance_story again — never pause to ask, never wait. Only the user speaking stops the flow.`;
-            });
-          },
+            }),
           // returns instantly so the narration never pauses to think —
           // the audio pipeline runs ahead while the queued visual flips
           // land on the rhythm of the words (see storyFlips above).
@@ -2084,9 +2180,8 @@ function VoiceCore({
           },
           // the inner weather: six weeks of the envelope's emotional
           // stamps, drawn as a seismograph — no model in the loop
-          get_emotional_weather: () => {
-            const blocked = gateKnowledgeTool("get_emotional_weather");
-            return blocked ? Promise.resolve(blocked) : track("reading the inner sky", async () => {
+          get_emotional_weather: () =>
+            track("reading the inner sky", async () => {
               const id = ++seq.current;
               pushCard({ id, kind: "mood", status: "loading" });
               try {
@@ -2109,12 +2204,10 @@ function VoiceCore({
                 updateCard(id, { status: "error", error: "the needle isn't answering" });
                 return "The inner-weather read failed. Say so in one short line.";
               }
-            });
-          },
+            }),
           // the senses: each look at the world conjures a card on screen
-          get_weather: ({ place }: { place?: string }) => {
-            const blocked = gateKnowledgeTool("get_weather");
-            return blocked ? Promise.resolve(blocked) : track("reading the sky", async () => {
+          get_weather: ({ place }: { place?: string }) =>
+            track("reading the sky", async () => {
               const id = ++seq.current;
               pushCard({ id, kind: "weather", status: "loading" });
               try {
@@ -2137,8 +2230,7 @@ function VoiceCore({
                 updateCard(id, { status: "error", error: "the sky isn't answering" });
                 return "The weather service didn't answer. Say so briefly and move on.";
               }
-            });
-          },
+            }),
           search_web: ({
             query,
             freshness,
@@ -2147,12 +2239,8 @@ function VoiceCore({
             query: string;
             freshness?: string;
             intent?: string;
-          }) => {
-            const blocked = gateKnowledgeTool("search_web");
-            return blocked
-              ? Promise.resolve(blocked)
-              : track("reaching the wider world", () => webContextForTurn(query, freshness, intent));
-          },
+          }) =>
+            track("reaching the wider world", () => webContextForTurn(query, freshness, intent)),
           resolve_hybrid_context: ({
             memory_query,
             web_query,
@@ -2163,18 +2251,14 @@ function VoiceCore({
             web_query: string;
             freshness?: string;
             intent?: string;
-          }) => {
-            const blocked = gateKnowledgeTool("resolve_hybrid_context");
-            return blocked
-              ? Promise.resolve(blocked)
-              : track("joining memory and world", async () => {
+          }) =>
+            track("joining memory and world", async () => {
                   const [memory, world] = await Promise.all([
                     memoryContextForTurn(memory_query),
                     webContextForTurn(web_query, freshness, intent),
                   ]);
                   return `PRIVATE PERSONAL CONTEXT:\n${memory}\n\nCURRENT EXTERNAL TRUTH:\n${world}\n\nSynthesize them once. Keep private evidence and external claims distinct, mention uncertainty honestly, and never expose source-routing machinery.`;
-                });
-          },
+                }),
         },
       });
       if (sensed.timedOut) {
@@ -2225,16 +2309,6 @@ function VoiceCore({
             <span>live latency</span>
             <span>{latencySamples.length} samples</span>
           </div>
-          {knowledgeRouteView && (
-            <div className="mb-3 rounded-xl border border-sky-300/10 bg-sky-300/[0.04] px-3 py-2 font-mono text-[9px] leading-relaxed text-sky-100/70">
-              <div>{knowledgeRouteView.kind} · {knowledgeRouteView.domain}</div>
-              <div className="mt-0.5 text-zinc-500">
-                {knowledgeRouteView.allowedRetrievalTools.length
-                  ? knowledgeRouteView.allowedRetrievalTools.join(", ")
-                  : "no retrieval"}
-              </div>
-            </div>
-          )}
           {latencyRows.length ? (
             <div className="max-h-[38vh] space-y-1.5 overflow-y-auto pr-1 font-mono text-[10px] text-zinc-400">
               {latencyRows.map((row) => (
@@ -2384,7 +2458,7 @@ function VoiceCore({
               {pending.preview.length === 1 ? "memory" : "memories"}?
             </p>
             <p className="mt-1.5 text-[13px] leading-relaxed text-zinc-400">
-              Recall wants to permanently delete everything about “{pending.about}”. This cannot
+              the Pal wants to permanently delete everything about “{pending.about}”. This cannot
               be undone.
             </p>
             <div className="mt-5 flex max-h-52 flex-col gap-2.5 overflow-y-auto">

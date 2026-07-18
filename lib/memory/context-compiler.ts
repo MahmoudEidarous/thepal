@@ -275,7 +275,7 @@ export function compileContext(
       slot: "prospective",
       item: {
         id: trigger.id, source: "prospective", priority: "P2",
-        text: `When ${trigger.topic} returned, the user asked Recall to: ${trigger.action}`,
+        text: `When ${trigger.topic} returned, the user asked the Pal to: ${trigger.action}`,
         whyIncluded: trigger.reason, allowedUse: "assert", confidence: "direct",
         sensitivity: sensitivityFor(evidenceEventIds, events), validTime: null, evidenceEventIds,
         score: 9_000 + trigger.score,

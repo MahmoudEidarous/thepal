@@ -71,8 +71,8 @@
     {
       "name": "materialized continuity kernel and session bridge",
       "command": "npm run eval:memory-kernel",
-      "expected": "56 checks passing",
-      "successMarker": "56 memory-kernel checks passed"
+      "expected": "60 checks passing",
+      "successMarker": "60 memory-kernel checks passed"
     },
     {
       "name": "model-directed natural continuity and presence",
@@ -101,8 +101,14 @@
     {
       "name": "knowledge source routing and tool authority",
       "command": "npm run eval:knowledge-router",
-      "expected": "222 checks passing",
-      "successMarker": "222 knowledge-router checks passed"
+      "expected": "100 model-directed policy checks passing",
+      "successMarker": "100 model-directed knowledge-policy checks passed"
+    },
+    {
+      "name": "background user-turn memory observation",
+      "command": "npm run eval:memory-observer",
+      "expected": "34 checks passing",
+      "successMarker": "34 memory-observer checks passed"
     },
     {
       "name": "thread retrieval and product experience",

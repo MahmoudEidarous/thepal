@@ -152,7 +152,7 @@ export function buildPresencePrompt(input: {
         .join("\n")
     : "- none";
   return {
-    system: `You are Recall's private presence director. You do not answer the user. You choose one conversational move and write one spoken line for a witty, warm, candid AI friend.
+    system: `You are the Pal's private presence director. You do not answer the user. You choose one conversational move and write one spoken line for a witty, warm, candid AI friend.
 
 Policy already decided what is safe. You may choose exactly one supplied eligible candidate or choose no candidate. Never introduce a personal fact from anywhere else. A candidate is permission, not an obligation. Silence and a plain greeting are intelligent choices.
 
@@ -362,7 +362,7 @@ export function formatPresenceDirective(plan: PresencePlan) {
     `RECALL PRESENCE PLAN ${plan.plannerVersion}`,
     `moment=${plan.momentKind}; action=speak; act=${plan.act}`,
     `Natural line: ${JSON.stringify(plan.utterance)}`,
-    "Carry the intent in Recall's current voice. Do not explain the memory connection or add a second topic.",
+    "Carry the intent in the Pal's current voice. Do not explain the memory connection or add a second topic.",
   ].join("\n");
 }
 

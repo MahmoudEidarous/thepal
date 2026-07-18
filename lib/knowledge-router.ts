@@ -1,6 +1,7 @@
-export const KNOWLEDGE_ROUTER_VERSION = "knowledge-router-v1" as const;
+export const KNOWLEDGE_ROUTER_VERSION = "knowledge-policy-v2-model-directed" as const;
 
 export type KnowledgeRouteKind =
+  | "model_directed"
   | "conversation"
   | "supplied_context"
   | "general_knowledge"
@@ -11,6 +12,7 @@ export type KnowledgeRouteKind =
   | "clarify";
 
 export type KnowledgeDomain =
+  | "adaptive"
   | "social"
   | "current_turn"
   | "general"
@@ -42,6 +44,21 @@ export type KnowledgeRetrievalTool =
   | "search_web"
   | "show_story"
   | "resolve_hybrid_context";
+
+export const MODEL_DIRECTED_RETRIEVAL_TOOLS: KnowledgeRetrievalTool[] = [
+  "search_memories",
+  "get_profile",
+  "get_agenda",
+  "get_life_threads",
+  "get_continuity",
+  "get_prospective_memories",
+  "get_briefing",
+  "get_emotional_weather",
+  "get_weather",
+  "search_web",
+  "show_story",
+  "resolve_hybrid_context",
+];
 
 export type KnowledgeCoverage = {
   selectedMemory: boolean;
@@ -98,401 +115,15 @@ const EMPTY_COVERAGE: KnowledgeCoverage = {
   degradedSources: [],
 };
 
-function clean(value: string) {
-  return value
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 2_000);
-}
-
-function has(text: string, pattern: RegExp) {
-  return pattern.test(text);
-}
-
-function route(
-  kind: KnowledgeRouteKind,
-  domain: KnowledgeDomain,
-  reason: string,
-  options: Partial<Pick<
-    KnowledgeRoute,
-    | "evidenceRequired"
-    | "freshnessRequired"
-    | "requiresEpisodicEvidence"
-    | "requiredSources"
-    | "allowedRetrievalTools"
-  >> = {},
-): Omit<KnowledgeRoute, "coverage"> {
-  return {
-    contractVersion: 1,
-    routerVersion: KNOWLEDGE_ROUTER_VERSION,
-    kind,
-    domain,
-    evidenceRequired: options.evidenceRequired ?? false,
-    freshnessRequired: options.freshnessRequired ?? false,
-    requiresEpisodicEvidence: options.requiresEpisodicEvidence ?? false,
-    requiredSources: options.requiredSources ?? ["current_turn"],
-    allowedRetrievalTools: options.allowedRetrievalTools ?? [],
-    reason,
-  };
-}
-
-function baseRoute(input: KnowledgeRouteInput): Omit<KnowledgeRoute, "coverage"> {
-  const original = clean(input.query);
-  const text = original.toLowerCase();
-  const hasRecentContext = (input.recentTurns?.length ?? 0) > 1 || !!input.selectedMemory;
-  if (!text) {
-    return route("conversation", "social", "No factual request is present; remain conversational.");
-  }
-
-  const explicitStateChange = has(
-    text,
-    /\b(remember (?:that|this)|save (?:that|this)|forget (?:that|this|everything)|next time .+ remind me|when i mention .+ remind me|cancel (?:that|the) reminder|snooze (?:that|the) reminder|mark .+ (?:done|complete)|i (?:did|finished|completed) it)\b/,
-  );
-  if (explicitStateChange) {
-    return route(
-      "conversation",
-      "state_change",
-      "The user requested a state change, not factual retrieval; use the matching write/lifecycle tool only.",
-    );
-  }
-
-  const vagueReference = has(
-    text,
-    /^(?:what about (?:that|this|it)|is (?:that|this|it) good|did (?:that|this|it) happen|look it up|check that|and (?:him|her|that|this))\??$/,
-  );
-  if (vagueReference && !hasRecentContext) {
-    return route("clarify", "ambiguous", "The referent is unavailable; ask one natural clarification.", {
-      evidenceRequired: true,
-      requiredSources: ["clarification"],
-    });
-  }
-  if (vagueReference && hasRecentContext) {
-    return route(
-      "conversation",
-      "current_turn",
-      "The referent is already available in the active conversation; do not retrieve it again.",
-    );
-  }
-
-  const asksConstellation = has(
-    text,
-    /\b(?:(?:(?:show|take|walk) me through|recap|summarize|how was) (?:my )?(?:(?:this|last) )?(?:week|month)|what changed (?:in|during) (?:my )?(?:(?:this|last) )?(?:week|month)|(?:my|this|last) (?:week|month) (?:in review|recap|summary|constellation)|weekly constellation|monthly (?:constellation|arc))\b/,
-  );
-  if (asksConstellation) {
-    return route("structured_state", "continuity", "The canonical week/month projector owns this continuity view.", {
-      evidenceRequired: true,
-      requiredSources: ["structured_state"],
-      allowedRetrievalTools: ["get_continuity"],
-    });
-  }
-
-  const asksDossier = has(
-    text,
-    /\b(?:what do you know about|what(?:'s| is) going on with|tell me about|show me (?:the )?(?:dossier|history) (?:for|on)|my history with)\s+[^?!.]{2,120}[?!.]?$/,
-  );
-  if (asksDossier) {
-    return route("personal_memory", "continuity", "A living entity dossier should answer before loose episodic recall.", {
-      evidenceRequired: true,
-      requiresEpisodicEvidence: true,
-      requiredSources: ["structured_state", "personal_memory"],
-      allowedRetrievalTools: ["get_continuity", "search_memories"],
-    });
-  }
-
-  const asksRoutines = has(
-    text,
-    /\b(?:what are|show me|have you noticed|do you notice) (?:my )?(?:routines|habits|recurring patterns)|what (?:patterns|routines|habits) (?:do you|have you) (?:see|noticed)|how do i usually\b/,
-  );
-  if (asksRoutines) {
-    return route("structured_state", "continuity", "The routine projector preserves evidence thresholds and uncertainty.", {
-      evidenceRequired: true,
-      requiredSources: ["structured_state"],
-      allowedRetrievalTools: ["get_continuity"],
-    });
-  }
-
-  const asksAnniversaries = has(
-    text,
-    /\b(?:on this day|what happened (?:a year|one year|six months|a month) ago today|anything from (?:this day|a year ago today)|what (?:comes|came) back today|returning past|anniversar(?:y|ies))\b/,
-  );
-  if (asksAnniversaries) {
-    return route("structured_state", "continuity", "The canonical calendar projector owns returning memories.", {
-      evidenceRequired: true,
-      requiredSources: ["structured_state"],
-      allowedRetrievalTools: ["get_continuity"],
-    });
-  }
-
-  const asksSharedHumor = has(
-    text,
-    /\b(?:what are|show me|do we have|remember) (?:any )?(?:our )?(?:inside jokes?|shared jokes?|running jokes?|shared callbacks?|callbacks?)|what jokes? (?:do we share|have we made ours)\b/,
-  );
-  if (asksSharedHumor) {
-    return route("structured_state", "continuity", "The relationship ledger is the authority for earned shared references.", {
-      evidenceRequired: true,
-      requiredSources: ["structured_state"],
-      allowedRetrievalTools: ["get_continuity"],
-    });
-  }
-
-  const asksThreads = has(
-    text,
-    /\b(what(?:'s| is) still going on(?: with .+)?|what (?:am i|are we) waiting (?:on|for)|(?:show me|list|tell me) (?:my |the |our )?(?:open loops?|life threads?)|(?:my |our )?(?:open loops?|life threads?)|what are my active (?:situations|life threads?|threads?)|which situations are (?:blocked|unresolved|unfinished)|what(?:'s| is) unresolved(?: in my life)?|where did (?:we|i) leave .+|unfinished situations?)\b/,
-  );
-  if (asksThreads) {
-    return route("structured_state", "threads", "The life-thread ledger is the exact authority for unfinished situations.", {
-      evidenceRequired: true,
-      requiredSources: ["structured_state"],
-      allowedRetrievalTools: ["get_life_threads"],
-    });
-  }
-
-  const asksAgenda = has(
-    text,
-    /\b(what do i owe|what(?:'s| is) (?:on )?my (?:agenda|plate|list)|open commitments?|commitments? (?:do i|are)|what is due|what(?:'s| is) due|deadlines?|to-?do(?:s)?|things i need to do)\b/,
-  );
-  if (asksAgenda) {
-    return route("structured_state", "agenda", "The commitment ledger is the exact authority.", {
-      evidenceRequired: true,
-      requiredSources: ["structured_state"],
-      allowedRetrievalTools: ["get_agenda"],
-    });
-  }
-
-  const asksProspective = has(
-    text,
-    /\b(what (?:were|are) you (?:going|supposed) to remind me|future reminders?|prospective memor(?:y|ies)|waiting to remind me|next-time reminders?|reminders? (?:are )?waiting)\b/,
-  );
-  if (asksProspective) {
-    return route(
-      "structured_state",
-      "prospective",
-      "The prospective-memory ledger is the exact authority.",
-      {
-        evidenceRequired: true,
-        requiredSources: ["structured_state"],
-        allowedRetrievalTools: ["get_prospective_memories"],
-      },
-    );
-  }
-
-  if (has(text, /\b(briefing|what did you dream|dream report|catch me up from the briefing)\b/)) {
-    return route("structured_state", "briefing", "The generated briefing is the requested artifact.", {
-      evidenceRequired: true,
-      requiredSources: ["structured_state"],
-      allowedRetrievalTools: ["get_briefing"],
-    });
-  }
-
-  if (
-    has(
-      text,
-      /\b(how have i been feeling|emotional weather|emotional arc|mood (?:this|last) (?:week|month)|emotionally lately|roughest day|brightest day)\b/,
-    )
-  ) {
-    return route(
-      "personal_memory",
-      "emotional_history",
-      "The answer requires the user's grounded emotional history.",
-      {
-        evidenceRequired: true,
-        requiresEpisodicEvidence: true,
-        requiredSources: ["personal_memory"],
-        allowedRetrievalTools: ["get_emotional_weather", "search_memories"],
-      },
-    );
-  }
-
-  if (
-    has(
-      text,
-      /\b(take me through|tell me the story of|show me the story of|how did .+ happen|walk me through my|show me my (?:week|month|year))\b/,
-    )
-  ) {
-    return route("personal_memory", "story", "The user asked for an episodic memory tour.", {
-      evidenceRequired: true,
-      requiresEpisodicEvidence: true,
-      requiredSources: ["personal_memory"],
-      allowedRetrievalTools: ["show_story", "search_memories"],
-    });
-  }
-
-  const asksProfile = has(
-    text,
-    /\b(what do you know about me|who am i|describe me|my profile|what are my preferences|what do i (?:like|love|hate|prefer)|what(?:'s| is) my favorite)\b/,
-  );
-
-  const explicitMemory = has(
-    text,
-    /\b(do you remember|remember when|search (?:your|my|our) memor(?:y|ies)|look (?:in|through) (?:your|my|our) memor(?:y|ies)|did i (?:ever )?tell you|what did i (?:say|tell you)|have i ever|when did i|where did i|who did i|last time i|what happened with my|what happened to my)\b/,
-  );
-  const personalPattern = has(
-    text,
-    /\b(?:why|do|am|have|what|when|where|who) (?:i|me|my)\b.*\b(always|usually|normally|tend to|used to|favorite|prefer|like|hate|pattern|habit)\b|\b(always|usually|normally|tend to|used to)\b.*\b(i|me|my)\b/,
-  );
-  const personalHistory = explicitMemory || personalPattern || asksProfile;
-  const personalContext =
-    personalHistory ||
-    has(
-      text,
-      /\b(?:given|based on|considering)\b.*\b(?:what i told you|what you remember|my (?:history|situation|routine|usual|knee|sleep|insomnia))\b|\bmy usual\b/,
-    );
-
-  const explicitOnline = has(
-    text,
-    /\b(search (?:the )?(?:web|internet|online)|look (?:(?:it|this|that) )?up(?: online)?|google it|check online|find (?:it|that) online|give me sources?|cite (?:it|that|your sources?))\b/,
-  );
-  const asksWeather = has(
-    text,
-    /\b(weather|forecast|temperature|will it rain|is it raining|how hot|how cold|the sky (?:today|tomorrow))\b/,
-  );
-  const changingWorld = has(
-    text,
-    /\b(latest|breaking|news|right now|currently|current (?:studies|research|advice|guidance|version|ceo|president)|today(?:'s)?|tomorrow(?:'s)?|this (?:morning|afternoon|evening|week)|price|cost today|score|result|standings?|stock|market|exchange rate|open now|opening hours?|availability|in stock|traffic|delay|cancelled|schedule|release date|released yet|shipped yet|election|live)\b/,
-  );
-  const highStakes = has(
-    text,
-    /\b(diagnos|symptom|medication|dose|dosage|legal advice|laws? (?:in|about)|tax|investment|financial advice|visa requirements?|immigration requirements?)\b/,
-  );
-  const externalQuestion = has(text, /\b(what|when|where|who|which|is|are|did|does|has|how)\b/);
-  const needsLiveWorld = explicitOnline || asksWeather || highStakes || (changingWorld && externalQuestion);
-
-  if (personalContext && needsLiveWorld) {
-    return route("hybrid", "hybrid", "The answer needs both private history and current external truth.", {
-      evidenceRequired: true,
-      freshnessRequired: true,
-      requiresEpisodicEvidence: explicitMemory,
-      requiredSources: ["personal_memory", "live_web"],
-      allowedRetrievalTools: ["resolve_hybrid_context"],
-    });
-  }
-
-  if (asksWeather) {
-    return route("live_web", "weather", "Weather is current external state.", {
-      evidenceRequired: true,
-      freshnessRequired: true,
-      requiredSources: ["live_web"],
-      allowedRetrievalTools: ["get_weather"],
-    });
-  }
-
-  if (needsLiveWorld) {
-    return route(
-      "live_web",
-      "world",
-      highStakes
-        ? "The answer requires current authoritative verification."
-        : "The requested world fact may have changed and requires live retrieval.",
-      {
-        evidenceRequired: true,
-        freshnessRequired: true,
-        requiredSources: ["live_web"],
-        allowedRetrievalTools: ["search_web"],
-      },
-    );
-  }
-
-  if (asksProfile) {
-    return route("personal_memory", "profile", "The answer is private user-specific truth.", {
-      evidenceRequired: true,
-      requiredSources: ["personal_memory"],
-      allowedRetrievalTools: ["get_profile", "search_memories"],
-    });
-  }
-
-  if (explicitMemory || personalPattern) {
-    return route(
-      "personal_memory",
-      "personal_history",
-      "The answer requires evidence from the user's earlier life.",
-      {
-        evidenceRequired: true,
-        requiresEpisodicEvidence: explicitMemory,
-        requiredSources: ["personal_memory"],
-        allowedRetrievalTools: ["search_memories"],
-      },
-    );
-  }
-
-  const currentReference = has(
-    text,
-    /\b(what do you think (?:about )?(?:that|this|it)|does that make sense|should i do that|why would (?:that|this) happen|and then what|what about him|what about her)\b/,
-  );
-  if (currentReference && hasRecentContext) {
-    return route(
-      "conversation",
-      "current_turn",
-      "The active conversation already contains the needed referent.",
-    );
-  }
-
-  const socialOrAdvice = has(
-    text,
-    /^(?:hey|hi|hello|yo|thanks|thank you|good morning|good night|lol|haha|that(?:'s| is) (?:absolutely )?(?:funny|wild|crazy|great|awful)|i feel |i(?:'m| am) |i think |do you think |what do you think |should i |would you |help me (?:choose|decide|think|brainstorm)|tell me a joke|make me laugh|talk to me|keep me company)/,
-  );
-  if (socialOrAdvice || !externalQuestion) {
-    return route(
-      "conversation",
-      "social",
-      "This is social conversation, current emotion, opinion, or reasoning; retrieval would make it slower and less human.",
-    );
-  }
-
-  return route(
-    "general_knowledge",
-    "general",
-    "The question is stable general knowledge and does not require personal or current external evidence.",
-    {
-      requiredSources: ["model_knowledge"],
-    },
-  );
-}
-
-function refineWithCoverage(
-  initial: Omit<KnowledgeRoute, "coverage">,
-  coverage: KnowledgeCoverage,
-): Omit<KnowledgeRoute, "coverage"> {
-  const canonicalAvailable =
-    coverage.selectedMemory ||
-    coverage.canonicalItems > 0 ||
-    coverage.threadItems > 0 ||
-    coverage.continuityItems > 0 ||
-    coverage.historicalItems > 0;
-  const personalCoverageComplete = initial.requiresEpisodicEvidence
-    ? coverage.historicalItems > 0 || coverage.semanticHistoryChecked
-    : canonicalAvailable;
-
-  if (initial.kind === "personal_memory" && personalCoverageComplete) {
-    return route(
-      "supplied_context",
-      initial.domain,
-      coverage.historicalItems > 0
-        ? "Relevant personal evidence is already inside the supplied context packet."
-        : coverage.semanticHistoryChecked
-          ? "Personal memory was already searched for this turn; use the supplied result or its honest miss."
-          : "Relevant canonical truth is already inside the supplied context packet.",
-      {
-        evidenceRequired: initial.evidenceRequired,
-        freshnessRequired: initial.freshnessRequired,
-        requiresEpisodicEvidence: initial.requiresEpisodicEvidence,
-        requiredSources: ["supplied_context"],
-      },
-    );
-  }
-
-  if (initial.kind === "hybrid" && canonicalAvailable) {
-    return {
-      ...initial,
-      reason: "The personal side is already supplied; only current external truth still requires retrieval.",
-      requiredSources: ["supplied_context", "live_web"],
-      allowedRetrievalTools: initial.domain === "weather" ? ["get_weather"] : ["search_web"],
-    };
-  }
-
-  return initial;
-}
-
+/**
+ * This used to classify each sentence with regular expressions and then block
+ * every retrieval tool outside the chosen class. That made wording bugs into
+ * hard failures. Source selection now belongs to the conversational model.
+ *
+ * The manifest remains useful for observability and for telling the client
+ * which read-only capabilities are in bounds. It is deliberately identical
+ * for every wording, so it cannot overrule the model's understanding.
+ */
 export function routeKnowledgeTurn(input: KnowledgeRouteInput): KnowledgeRoute {
   const coverage: KnowledgeCoverage = {
     ...EMPTY_COVERAGE,
@@ -500,8 +131,19 @@ export function routeKnowledgeTurn(input: KnowledgeRouteInput): KnowledgeRoute {
     selectedMemory: input.coverage?.selectedMemory ?? !!input.selectedMemory,
     degradedSources: [...new Set(input.coverage?.degradedSources ?? [])],
   };
+
   return {
-    ...refineWithCoverage(baseRoute(input), coverage),
+    contractVersion: 1,
+    routerVersion: KNOWLEDGE_ROUTER_VERSION,
+    kind: "model_directed",
+    domain: "adaptive",
+    evidenceRequired: false,
+    freshnessRequired: false,
+    requiresEpisodicEvidence: false,
+    requiredSources: ["current_turn"],
+    allowedRetrievalTools: [...MODEL_DIRECTED_RETRIEVAL_TOOLS],
+    reason:
+      "The conversational model chooses no source, one source, or several independent sources from meaning and context.",
     coverage,
   };
 }
@@ -521,21 +163,16 @@ export function formatKnowledgeRoute(decision: KnowledgeRoute) {
     decision.coverage.historicalItems ? `${decision.coverage.historicalItems} episodes` : "",
     decision.coverage.selectedMemory ? "selected memory" : "",
   ].filter(Boolean);
+
   return [
-    `RECALL KNOWLEDGE ROUTE ${decision.routerVersion}`,
-    `Decision: ${decision.kind} · ${decision.domain}`,
-    `Why: ${decision.reason}`,
-    `Already supplied: ${supplied.length ? supplied.join(", ") : "current turn only"}`,
-    `Allowed retrieval: ${decision.allowedRetrievalTools.length ? decision.allowedRetrievalTools.join(", ") : "none"}`,
-    decision.kind === "conversation"
-      ? "Action: answer naturally now from the current conversation, personality, and reasoning. Do not call a retrieval tool."
-      : decision.kind === "general_knowledge"
-        ? "Action: answer from stable model knowledge. Do not retrieve unless the user asks for current verification."
-        : decision.kind === "supplied_context"
-          ? "Action: the needed evidence is already in the newest context packet. Answer from it without searching again."
-          : decision.kind === "clarify"
-            ? "Action: ask one natural clarification; do not guess or retrieve an unresolved referent."
-            : "Action: use only the allowed retrieval source, once. Never substitute a different authority.",
-    "This routing block is internal policy. Never mention routes, tools, manifests, or source machinery to the user.",
+    `RECALL SOURCE POLICY ${decision.routerVersion}`,
+    "Decision: the conversational model owns source selection for this turn.",
+    `Already supplied: ${supplied.length ? supplied.join(", ") : "current conversation and continuity kernel"}`,
+    "Use zero tools for ordinary conversation, reasoning, stable knowledge, or facts already present.",
+    "Use the narrowest authoritative tool when unavailable evidence is necessary. Use multiple tools when distinct parts of the question genuinely require different authorities.",
+    "Earlier private life belongs to Recall memory; exact ledgers and projections belong to their structured tools; changing external facts belong to live-world tools.",
+    "Never send private personal details to web search. Never use web results as evidence of the user's life. Never replace current external truth with an old memory or training-era guess.",
+    "Do not duplicate a lookup whose answer is already supplied. If evidence is absent after a justified lookup, say so honestly.",
+    "This policy is internal. Never mention sources, routes, tools, gates, or manifests to the user.",
   ].join("\n");
 }

@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Recall — a second brain with an agenda",
+  title: "thepal",
   description:
     "Watch your memory form, evolve, and act. Powered by Supermemory Local — everything on your own machine.",
   icons: { icon: FAVICON },

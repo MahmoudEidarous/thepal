@@ -452,7 +452,7 @@ export default function Brain() {
           href="/"
           className="flex items-baseline gap-1 text-[16px] font-semibold tracking-tight text-white transition-opacity hover:opacity-80"
         >
-          recall
+          the pal
           <span className="inline-block size-[5px] rounded-full bg-blue-400" />
         </Link>
 

@@ -486,7 +486,7 @@ export function buildConstellation(
     ]),
   ];
   const label = period === "week" ? "seven days" : "month";
-  const agentText = `Across this ${label}, Recall has ${toldEvents.length} telling${toldEvents.length === 1 ? "" : "s"}, ${peopleMap.size} named ${peopleMap.size === 1 ? "person" : "people"}, ${decisions.length} decision${decisions.length === 1 ? "" : "s"}, ${emotionalEpisodes.length} emotional episode${emotionalEpisodes.length === 1 ? "" : "s"}, and ${unfinishedThreads.length} unfinished thread${unfinishedThreads.length === 1 ? "" : "s"}. ${resolvedThreads.length ? `${resolvedThreads.length} thread${resolvedThreads.length === 1 ? " was" : "s were"} resolved.` : ""}`.trim();
+  const agentText = `Across this ${label}, the Pal has ${toldEvents.length} telling${toldEvents.length === 1 ? "" : "s"}, ${peopleMap.size} named ${peopleMap.size === 1 ? "person" : "people"}, ${decisions.length} decision${decisions.length === 1 ? "" : "s"}, ${emotionalEpisodes.length} emotional episode${emotionalEpisodes.length === 1 ? "" : "s"}, and ${unfinishedThreads.length} unfinished thread${unfinishedThreads.length === 1 ? "" : "s"}. ${resolvedThreads.length ? `${resolvedThreads.length} thread${resolvedThreads.length === 1 ? " was" : "s were"} resolved.` : ""}`.trim();
   return {
     type: "constellation",
     period,

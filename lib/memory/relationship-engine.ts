@@ -430,13 +430,13 @@ export function projectRelationshipState(
 
 export function activeRelationshipRepair(state: RelationshipState): AttentionRepair | null {
   if (state.rupture.status !== "open" && state.rupture.status !== "repairing") return null;
-  const summary = state.rupture.summary ?? "Recall caused a relationship rupture";
+  const summary = state.rupture.summary ?? "the Pal caused a relationship rupture";
   const patch = state.rupture.policyPatch
     ? ` Change future behavior: ${state.rupture.policyPatch}`
     : " State one concrete behavior change only if it is actually enforceable.";
   return {
     reason: summary,
-    instruction: `Stop banter. Name the specific failure, own it without defensiveness, correct what can be corrected now, apologize once, and do not ask the user to comfort Recall.${patch}`,
+    instruction: `Stop banter. Name the specific failure, own it without defensiveness, correct what can be corrected now, apologize once, and do not ask the user to comfort the Pal.${patch}`,
     evidenceEventIds: state.rupture.evidenceEventIds,
     relationshipEventIds: state.rupture.evidenceRelationshipEventIds,
   };
@@ -513,8 +513,8 @@ export function decideRelationshipExpression(input: {
     .map((boundary) => `${boundary.rule} [${boundary.scope}]`);
   const proceduralRules = input.state.proceduralRules.map((rule) => rule.rule);
   const instruction = repairPriority
-    ? "Repair before charm. Preserve the stable Recall voice, but suppress wit until the specific failure is owned and corrected."
-    : "Keep Recall's stable core: warm, quick, candid, curious, witty, and useful—a friend, never service theater. Learned dialect may tune delivery but cannot change facts, boundaries, safety, or identity.";
+    ? "Repair before charm. Preserve the stable Pal voice, but suppress wit until the specific failure is owned and corrected."
+    : "Keep the Pal's stable core: warm, quick, candid, curious, witty, and useful—a friend, never service theater. Learned dialect may tune delivery but cannot change facts, boundaries, safety, or identity.";
   return {
     contractVersion: 1,
     engineVersion: RELATIONSHIP_EXPRESSION_VERSION,

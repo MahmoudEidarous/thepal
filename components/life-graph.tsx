@@ -309,7 +309,7 @@ function DetailPanel({
 
         {node.detail.facts.length > 0 && (
           <section>
-            <p className="mb-2.5 font-mono text-[9px] uppercase tracking-[0.24em] text-zinc-600">what Recall currently believes</p>
+            <p className="mb-2.5 font-mono text-[9px] uppercase tracking-[0.24em] text-zinc-600">what the Pal currently believes</p>
             <div className="divide-y divide-white/[0.055]">
               {node.detail.facts.map((fact) => (
                 <div key={fact.key} className="py-2.5 first:pt-0">

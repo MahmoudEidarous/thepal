@@ -21,7 +21,7 @@ export default defineTool({
         "osascript",
         [
           "-e",
-          `display notification ${JSON.stringify(message)} with title "Recall" sound name "Glass"`,
+          `display notification ${JSON.stringify(message)} with title "the Pal" sound name "Glass"`,
         ],
         (err) => (err ? reject(err) : resolve()),
       );

@@ -139,7 +139,7 @@ export default function Home() {
       {/* chrome */}
       <header className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-6 py-5">
         <div className="flex items-baseline gap-1 text-[16px] font-semibold tracking-tight text-white">
-          recall
+          the pal
           <span className="inline-block size-[5px] rounded-full bg-blue-400" />
         </div>
         <div className="flex items-center gap-3">

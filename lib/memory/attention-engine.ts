@@ -776,7 +776,7 @@ function repair(moment: AttentionMoment): CandidateDraft[] {
       action: "repair_relationship",
       text: clean(moment.repair.reason, 500),
       instruction: clean(moment.repair.instruction, 800),
-      whyNow: "Recall has an unresolved mistake or rupture to own before continuing",
+      whyNow: "the Pal has an unresolved mistake or rupture to own before continuing",
       cooldownSeed: moment.repair.reason,
       threshold: 0,
       relevance: 1,
