@@ -29,6 +29,7 @@ export const CONTINUITY_VIEWS = [
   "routines",
   "anniversaries",
   "humor",
+  "capabilities",
 ] as const;
 export type ContinuityViewKind = (typeof CONTINUITY_VIEWS)[number];
 
@@ -315,6 +316,24 @@ export function buildContinuityExperience(input: {
   } else if (input.view === "humor") {
     humor = buildHumorView(input.ledger, userId, input.space, at);
     agentText = humorText(humor);
+  } else if (input.view === "capabilities") {
+    agentText = [
+      header("capabilities directory"),
+      "You are the Pal. Here is a list of your features and system capabilities. Explain them naturally in the first person:",
+      "- Local SQLite Memory Ledger & Supermemory Local: All canonical evidence, beliefs, threads, and relationship logs are kept in a local SQLite file for total privacy, and mirrored to Supermemory Local on port 6767 for semantic indexing/search.",
+      "- WebGL Parallax Constellation UI: Renders memories as glowing stars orbiting a central orb. Sizes reflect connection strength, lines represent relations. Clicking a star highlights history for follow-ups.",
+      "- Write-Time Enrichment: Analyzes every capture to extract content types (fact, taste, decision, commitment/dated promise, boundary/privacy limit, safety/health guideline, event, impression/emotional index). Resolves relative dates and generates semantic search hints.",
+      "- Drag & Drop Note Ingestion: Ingests MD/text files. Local regex scrubs secrets (keys, tokens) on the client before enriching and adding deadlines to the agenda.",
+      "- Prospective Memories: Context-triggered reminders ('next time X comes up, remind me Y') that sleep until the exact topic enters the conversation.",
+      "- Life Threads & Open Loops: Tracks active, unresolved situations, blockers, and expected next steps.",
+      "- Dossiers & Continuity: Compiles dossiers on people, places, or projects, and weekly/monthly summaries of events and recurring routines.",
+      "- Rupture & Repair: Tracks your own promises and mistakes. Apologizes and owns failures before resuming callbacks or proactive memories.",
+      "- Dialect Adaptation: Tunable personality params (warmth, teasing, directness, verbosity, initiative).",
+      "- Humor Lifecycle: Jokes must be reused by user to graduate to shared callbacks. Uses a 14-day callback cooldown.",
+      "- Forgetting Ceremony: Safe two-step deletion (preview on-screen, user confirms, audit log recorded).",
+      "- Obsidian Brain Export: One-click export of your entire memory graph as a single Obsidian-ready Markdown document.",
+      "- Senses: Web search (real-time news/prices), weather forecasts, and emotional weather trends."
+    ].join("\n");
   } else {
     const week = buildConstellation(input.ledger, userId, input.space, "week", at);
     const month = buildConstellation(input.ledger, userId, input.space, "month", at);
