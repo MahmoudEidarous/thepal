@@ -1,21 +1,17 @@
 # 🌌 thepal
 
 > **A local-first memory ledger engine and voice friend built on Supermemory Local.**  
-> *A canonical SQLite database, semantic mirror, and write-time enrichment pass that make local AI memory exact, grounded, and self-directing.*
+> *A canonical SQLite database, semantic search mirror, and write-time enrichment pass that make local AI memory exact, grounded, and self-directing.*
 
 ---
 
-`thepal` is built on a core thesis: **Memory infrastructure is not the product; judgment, continuity, and initiative are.** 
-
-Instead of relying on naive vector search and chat history, `thepal` utilizes a structured local **SQLite evidence ledger** coupled with a high-speed **Supermemory Local** semantic mirror. It resolves facts, extracts commitments, reconciles contradictions, and implements a unified attention gating flow—all running privately on your own machine.
-
-Built for the **Supermemory Local Hackathon, July 2026**.
+`thepal` is a voice-first memory companion that runs entirely locally on your machine. Rather than relying on naive vector search over raw chat history, it operates on a structured **SQLite evidence ledger** coupled with a high-speed **Supermemory Local** semantic search mirror. 
 
 ---
 
-## 🧠 The Memory Engine (The Hero)
+## 🧠 The Memory Search & Ledger Engine
 
-At the core of `thepal` is a multi-tier memory architecture designed to ensure zero hallucination, strict factual grounding, and high-integrity recall.
+At the core of `thepal` is a multi-tier memory system designed to ensure zero hallucination, strict factual grounding, and high-integrity search recall.
 
 ```
                  You (Voice / Files)
@@ -31,42 +27,47 @@ At the core of `thepal` is a multi-tier memory architecture designed to ensure z
    Attentions, Relationships)         & Vector Search Mirror)
 ```
 
-### 1. The SQLite Canonical Ledger
-`thepal` does not treat vector search as the source of truth. Instead, it maintains a strict, relational SQLite database (`.recall/memory.sqlite`) tracking:
-*   **Temporal Beliefs**: Facts structured as `subject · predicate: value` with confidence scores and conflict resolutions.
-*   **Life Threads**: Ongoing, long-term narrative connections across sessions.
-*   **Prospective Triggers**: Commitments and tasks anchored to specific calendar dates.
-*   **Attention Decisions**: A history of proactive statements the agent considered, gating reasons, and outcomes.
+### 1. Dual-Layer Retrieval (SQLite + Supermemory)
+Every query triggers a dual-layer lookup:
+*   **Beliefs**: Retrieves current, applicable, and validated database facts from the SQLite ledger.
+*   **Results**: Fetches semantic search candidates from the Supermemory Local index.
+*   *Grounding Policy*: SQLite beliefs always outrank and precede semantic results. If no direct user-asserted facts are found in the SQLite ledger, the system reports that it does not know, ensuring zero hallucination by construction.
 
-### 2. Write-Time Enrichment Envelope (`lib/envelope.ts`)
-No text enters the memory pool raw. Every input is classified, resolved, and structured:
-*   **Type Parsing**: Categorized into `fact`, `taste`, `decision`, `commitment`, `boundary`, `safety`, `event`, or `impression`.
-*   **Temporal Resolution**: Relative timestamps (*"next Friday at 4"*) are resolved to absolute ISO-8601 calendar dates at the moment of capture.
-*   **Search Enrichment**: Key aliases, alternative phrasings, and query targets are embedded directly into the payload, ensuring differently-worded questions still trigger semantic matches.
+### 2. Temporal Belief Intervals & Continuity
+Instead of flat history strings, claims are projected into evidence-linked belief intervals in SQLite:
+*   **Corrections & Supersedence**: Explicit corrections or updated statements close old belief intervals and open new ones. The original evidence is kept for historical context, but omitted from active retrieval.
+*   **Staleness & Expiry**: Direct facts (like a birthdate or hometown) do not decay over time. Inferred or observational beliefs are clamped to a 90-day applicability horizon, and emotional state records expire within a day.
+*   **Conflict Resolution**: Incompatible claims are marked as `conflicting`; recency alone does not invent certainty, and weaker contradictory evidence cannot overwrite direct user truth.
 
-### 3. Unified Attention Gating Flow (`lib/memory/attention-engine.ts`)
-To take initiative without becoming annoying, the Pal processes memory candidates (e.g. obligations, anniversaries, thread follow-ups) through **8 strict security gates** before authorizing a proactive remark:
-*   `user_permission` & `memory_space` matching.
+### 3. Write-Time Enrichment Envelope (`lib/envelope.ts`)
+All inputs pass through a local classification pass before they are committed to database storage:
+*   **Type Classification**: Classified into structured kinds (`fact`, `taste`, `decision`, `commitment`, `boundary`, `safety`, `event`, or `impression`).
+*   **Temporal Resolution**: Resolves relative time expressions (*"next Friday at 4"*, *"last summer"*) into concrete calendar dates at the moment of capture.
+*   **Search Optimization**: key aliases and alternative phrasings are embedded directly into the payload, ensuring differently-worded questions still trigger clean matches.
+
+### 4. Unified Attention Gating (`lib/memory/attention-engine.ts`)
+To take initiative without becoming noisy or annoying, proactive candidates (obligations, follow-ups, anniversaries) must clear 8 strict security gates:
+*   `user_permission` & `memory_space` validation.
 *   `source_grounding` (must be backed by direct database evidence).
-*   `sensitivity` limits (e.g., medical boundaries).
+*   `sensitivity` filters (e.g., medical safety limits).
 *   `cooldown` metrics to prevent conversational spam.
-*   `repair_priority` (any database-logged "rupture" blocks all jokes until repair is resolved).
+*   `repair_priority` (any database-logged relationship "rupture" blocks all proactive remarks until a repair is resolved).
 
 ---
 
-## 🎙️ The Voice & UI Experience (The Friend)
+## 🎙️ The Voice Friend Interface
 
-Sitting directly on top of this robust memory engine is the expressive, human-like voice interface:
+Sitting directly on top of the memory engine is an expressive, human-like voice interface:
 
-### 1. Uncensored Close-Friend Persona
-*   **No Assistant-Speak**: Banned words like *"Certainly!"* or *"I'm happy to help!"*.
-*   **Banter & Roasts**: The Pal behaves like a real companion. It teases you if you forget things, uses casual vernacular, and naturally swears (*shit, fuck, damn*) if you do.
-*   **Respiration**: Natively gasps, sighs, and takes realistic physical breaths during speech.
+### 1. Close-Friend Persona
+*   **Direct & Candid**: Buns all formal assistant pleasantries (*"Certainly!"*, *"How can I help you today?"*). Speak with contractions and a casual, direct, close-friend dialect.
+*   **Teasing & Banter**: The Pal roasts you if you forget your own plans, and uses natural, casual swearing if the vibe matches.
+*   **Respiration**: Natively gasps, sighs, or takes a soft breath to sound physically present.
 
 ### 2. "Inner Monologue" Latency Masking
 *   While database searches and vector matches execute, the Pal drops a quick, context-aware, organic filler thought to hold the line:
-    *   *Example*: `[sighs] "Wait, you actually forgot that? Let me check the database..."`
-    *   *Example*: `"Damn, let me dig into the work log for a second..."`
+    *   *Example (Roast)*: `[sighs] "Wait, you actually forgot that? Let me check the database..."`
+    *   *Example (Puzzled)*: `[chuckles] "Wait, what? Let me pull up what you said about him..."`
 
 ### 3. Logo-Click Diagnostics Panel
 *   Click the **`the pal`** header logo in the UI to open a retro-monospace developer HUD showing live SQLite counts, database integrity checks, and mirror sync status.
